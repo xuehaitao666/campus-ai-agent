@@ -12,7 +12,7 @@ from langgraph.prebuilt import ToolNode
 
 from agents.campus_prompt import CAMPUS_AI_AGENT_SYSTEM_PROMPT
 from agents.safeguard import Safeguard, SafeguardOutput, SafetyAssessment
-from agents.tools import calculator
+from agents.tools import calculator, get_course_schedule
 from core import get_model, settings
 
 
@@ -27,7 +27,7 @@ class AgentState(MessagesState, total=False):
 
 
 web_search = DuckDuckGoSearchResults(name="WebSearch")
-tools = [web_search, calculator]
+tools = [web_search, calculator, get_course_schedule]
 
 # Add weather tool if API key is set
 # Register for an API key at https://openweathermap.org/api/
@@ -45,9 +45,11 @@ instructions = f"""
 
     NOTE: THE USER CAN'T SEE THE TOOL RESPONSE.
 
-    当前已接入的通用工具包括 WebSearch、Calculator，以及在配置 OPENWEATHERMAP_API_KEY 后可用的 Weather。
-    目前没有真实课程表查询工具或真实校园活动查询工具。遇到课程、教室、教师、校园活动、报名等需要真实校园数据的问题时，
-    请明确说明当前阶段尚未连接真实教务系统或校园活动平台，只能基于用户提供的信息进行规划、整理或模拟回答。
+    当前已接入的工具包括 get_course_schedule、WebSearch、Calculator，以及在配置 OPENWEATHERMAP_API_KEY 后可用的 Weather。
+    当用户询问课程、上课时间、教室、教师、课程安排等问题时，应优先调用 get_course_schedule。
+    get_course_schedule 使用本地 mock 课程表数据，不代表真实教务系统数据。
+    目前没有真实校园活动查询工具。遇到校园活动、讲座、比赛、社团、报名等需要真实校园数据的问题时，
+    请明确说明当前阶段尚未连接真实校园活动平台，只能基于用户提供的信息进行规划、整理或模拟回答。
 
     其他要求：
     - 如使用 WebSearch，请只引用工具返回的链接，并用 Markdown 链接格式给出一到两个必要引用。
