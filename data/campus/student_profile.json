@@ -1,0 +1,29 @@
+{
+  "student_name": "李明",
+  "major": "软件工程",
+  "grade": "大二",
+  "current_goal": "准备 AI Agent 实习面试，目标是在 8 周内完成基础能力补齐、项目梳理和面试训练。",
+  "preferred_study_time": {
+    "weekday": ["19:30-22:00"],
+    "weekend": ["09:30-11:30", "14:30-17:30"]
+  },
+  "skills_to_improve": [
+    "Python 工程化能力",
+    "LangChain 和 LangGraph 基础",
+    "RAG 与向量数据库",
+    "工具调用与 Agent 编排",
+    "FastAPI 后端开发",
+    "Streamlit 前端展示",
+    "算法与数据结构面试题",
+    "项目复盘与技术表达"
+  ],
+  "weekly_available_hours": 14,
+  "learning_style": "偏实践型学习，喜欢通过项目任务、代码练习和面试问答清单推进。",
+  "constraints": [
+    "周一、周三上午有专业课，不适合安排高强度学习",
+    "周二晚上有人工智能基础课程，可衔接 AI Agent 相关复盘",
+    "周四晚上有体育课，学习安排不宜过重",
+    "希望每周至少保留半天休息时间",
+    "需要兼顾数据库系统原理和操作系统课程作业"
+  ]
+}
