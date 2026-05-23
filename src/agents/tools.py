@@ -1,6 +1,7 @@
 import json
 import math
 import re
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import numexpr
@@ -11,6 +12,7 @@ from langchain_openai import OpenAIEmbeddings
 
 CAMPUS_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "campus"
 COURSE_SCHEDULE_PATH = CAMPUS_DATA_DIR / "course_schedule.json"
+CAMPUS_EVENTS_PATH = CAMPUS_DATA_DIR / "campus_events.json"
 
 
 def calculator_func(expression: str) -> str:
@@ -172,6 +174,124 @@ def get_course_schedule_func(
 
 get_course_schedule: BaseTool = tool(get_course_schedule_func)
 get_course_schedule.name = "get_course_schedule"
+
+
+def _load_campus_events() -> list[dict]:
+    with CAMPUS_EVENTS_PATH.open(encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, list):
+        raise ValueError("campus_events.json must contain a list of events")
+    return data
+
+
+def _parse_event_date(event: dict) -> date:
+    return datetime.strptime(event["date"], "%Y-%m-%d").date()
+
+
+def _get_date_range_bounds(date_range: str | None) -> tuple[date | None, date | None]:
+    if not date_range:
+        return None, None
+
+    normalized = date_range.strip().lower()
+    today = date.today()
+
+    if normalized in {"今天", "今日", "today"}:
+        return today, today
+    if normalized in {"明天", "tomorrow"}:
+        tomorrow = today + timedelta(days=1)
+        return tomorrow, tomorrow
+    if normalized in {"本周", "这周", "本星期", "这一周", "this week"}:
+        start = today - timedelta(days=today.weekday())
+        return start, start + timedelta(days=6)
+    if normalized in {"最近", "近期", "近两周", "recent", "upcoming"}:
+        return today, today + timedelta(days=30)
+
+    return None, None
+
+
+def _format_event(event: dict) -> str:
+    return (
+        f"- {event['title']} | {event['date']} {event['start_time']}-{event['end_time']} | "
+        f"地点：{event['location']} | 类型：{event['event_type']} | "
+        f"适合人群：{event['target_audience']} | 主办方：{event['organizer']} | "
+        f"报名方式：{event['registration_method']} | 简介：{event['description']}"
+    )
+
+
+def get_campus_events_func(
+    keyword: str | None = None,
+    date_range: str | None = None,
+    event_type: str | None = None,
+    target_audience: str | None = None,
+) -> str:
+    """Query local mock campus events.
+
+    Useful when students ask about campus activities, lectures, competitions,
+    clubs, recruitment events, workshops, or registration methods. All
+    parameters are optional and can be combined. Use keyword for fuzzy matching
+    in title, keywords, and description; date_range for values such as "今天",
+    "明天", "本周", or "最近"; event_type for values such as "讲座", "比赛",
+    "社团", "招聘", or "工作坊"; and target_audience for audience keywords such
+    as "软件工程", "计算机", or "人工智能".
+    """
+
+    events = sorted(_load_campus_events(), key=lambda event: (event["date"], event["start_time"]))
+    normalized_keyword = keyword.strip().lower() if keyword else None
+    normalized_event_type = event_type.strip().lower() if event_type else None
+    normalized_target_audience = target_audience.strip().lower() if target_audience else None
+    start_date, end_date = _get_date_range_bounds(date_range)
+
+    if not any([normalized_keyword, date_range, normalized_event_type, normalized_target_audience]):
+        today = date.today()
+        upcoming_events = [event for event in events if _parse_event_date(event) >= today]
+        preview_events = upcoming_events[:5] if upcoming_events else events[:5]
+        preview = "\n".join(_format_event(event) for event in preview_events)
+        return (
+            f"当前 mock 校园活动库共有 {len(events)} 个活动。"
+            "你可以按关键词、活动类型、日期范围或适合人群查询，例如：AI、比赛、最近、软件工程。\n"
+            f"近期活动摘要：\n{preview}"
+        )
+
+    matched_events = []
+    for event in events:
+        event_date = _parse_event_date(event)
+        title = str(event.get("title", "")).lower()
+        keywords = " ".join(str(item) for item in event.get("keywords", [])).lower()
+        description = str(event.get("description", "")).lower()
+        current_event_type = str(event.get("event_type", "")).lower()
+        current_target_audience = str(event.get("target_audience", "")).lower()
+
+        if normalized_keyword and normalized_keyword not in f"{title} {keywords} {description}":
+            continue
+        if normalized_event_type and normalized_event_type not in current_event_type:
+            continue
+        if normalized_target_audience and normalized_target_audience not in current_target_audience:
+            continue
+        if start_date and end_date and not (start_date <= event_date <= end_date):
+            continue
+
+        matched_events.append(event)
+
+    filters = []
+    if keyword:
+        filters.append(f"关键词：{keyword}")
+    if date_range:
+        filters.append(f"日期范围：{date_range}")
+    if event_type:
+        filters.append(f"活动类型：{event_type}")
+    if target_audience:
+        filters.append(f"适合人群：{target_audience}")
+    filter_text = "，".join(filters)
+
+    if not matched_events:
+        return f"没有找到符合条件的校园活动（{filter_text}）。请确认关键词、活动类型、日期范围或适合人群是否正确。"
+
+    formatted_events = "\n".join(_format_event(event) for event in matched_events)
+    return f"找到 {len(matched_events)} 个符合条件的校园活动（{filter_text}）：\n{formatted_events}"
+
+
+get_campus_events: BaseTool = tool(get_campus_events_func)
+get_campus_events.name = "get_campus_events"
 
 
 # Format retrieved documents
