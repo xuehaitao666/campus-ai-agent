@@ -359,6 +359,17 @@ def _build_learning_topic(topics: list[str], day_index: int, goal: str) -> str:
     return f"{topic}：围绕“{goal}”补齐核心知识点"
 
 
+def _get_plan_start_date(available_time: str | None) -> date:
+    if not available_time:
+        return date.today()
+
+    normalized = available_time.strip().lower()
+    if "明天" in normalized or "tomorrow" in normalized:
+        return date.today() + timedelta(days=1)
+
+    return date.today()
+
+
 def generate_study_plan_func(
     goal: str | None = None,
     days: int = 7,
@@ -385,7 +396,7 @@ def generate_study_plan_func(
     normalized_days = max(1, min(int(days or 7), 30))
     target_goal = goal or profile.get("current_goal") or "完成阶段性学习目标"
     topics = _split_focus_topics(focus_topics, profile)
-    start_date = date.today()
+    start_date = _get_plan_start_date(available_time)
 
     daily_plan = []
     for index in range(1, normalized_days + 1):
