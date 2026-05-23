@@ -12,7 +12,7 @@ from langgraph.prebuilt import ToolNode
 
 from agents.campus_prompt import CAMPUS_AI_AGENT_SYSTEM_PROMPT
 from agents.safeguard import Safeguard, SafeguardOutput, SafetyAssessment
-from agents.tools import calculator, get_campus_events, get_course_schedule
+from agents.tools import calculator, generate_study_plan, get_campus_events, get_course_schedule
 from core import get_model, settings
 
 
@@ -27,7 +27,7 @@ class AgentState(MessagesState, total=False):
 
 
 web_search = DuckDuckGoSearchResults(name="WebSearch")
-tools = [web_search, calculator, get_course_schedule, get_campus_events]
+tools = [web_search, calculator, get_course_schedule, get_campus_events, generate_study_plan]
 
 # Add weather tool if API key is set
 # Register for an API key at https://openweathermap.org/api/
@@ -45,11 +45,13 @@ instructions = f"""
 
     NOTE: THE USER CAN'T SEE THE TOOL RESPONSE.
 
-    当前已接入的工具包括 get_course_schedule、get_campus_events、WebSearch、Calculator，以及在配置 OPENWEATHERMAP_API_KEY 后可用的 Weather。
+    当前已接入的工具包括 get_course_schedule、get_campus_events、generate_study_plan、WebSearch、Calculator，以及在配置 OPENWEATHERMAP_API_KEY 后可用的 Weather。
     当用户询问课程、上课时间、教室、教师、课程安排等问题时，应优先调用 get_course_schedule。
     get_course_schedule 使用本地 mock 课程表数据，不代表真实教务系统数据。
     当用户询问校园活动、讲座、比赛、社团、招聘、工作坊、报名方式等问题时，应优先调用 get_campus_events。
     get_campus_events 使用本地 mock 校园活动数据，不代表真实校园活动平台数据。
+    当用户询问学习计划、面试准备、备考安排、本周规划、今日学习安排、实习准备等问题时，应优先调用 generate_study_plan。
+    generate_study_plan 使用本地 mock 学生画像和课程表生成规划，不代表学校正式学习或考试安排。
 
     其他要求：
     - 如使用 WebSearch，请只引用工具返回的链接，并用 Markdown 链接格式给出一到两个必要引用。

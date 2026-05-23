@@ -13,6 +13,7 @@ from langchain_openai import OpenAIEmbeddings
 CAMPUS_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "campus"
 COURSE_SCHEDULE_PATH = CAMPUS_DATA_DIR / "course_schedule.json"
 CAMPUS_EVENTS_PATH = CAMPUS_DATA_DIR / "campus_events.json"
+STUDENT_PROFILE_PATH = CAMPUS_DATA_DIR / "student_profile.json"
 
 
 def calculator_func(expression: str) -> str:
@@ -292,6 +293,127 @@ def get_campus_events_func(
 
 get_campus_events: BaseTool = tool(get_campus_events_func)
 get_campus_events.name = "get_campus_events"
+
+
+def _load_student_profile() -> dict:
+    with STUDENT_PROFILE_PATH.open(encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("student_profile.json must contain a student profile object")
+    return data
+
+
+def _split_focus_topics(focus_topics: str | None, profile: dict) -> list[str]:
+    if focus_topics:
+        topics = [item.strip() for item in re.split(r"[,，、/]\s*|\s+", focus_topics) if item.strip()]
+        if topics:
+            return topics
+
+    profile_topics = profile.get("skills_to_improve", [])
+    if isinstance(profile_topics, list) and profile_topics:
+        return [str(topic) for topic in profile_topics]
+
+    return ["基础知识复习", "项目实践", "面试表达"]
+
+
+def _preferred_time_for_day(day_date: date, profile: dict, available_time: str | None) -> str:
+    if available_time:
+        base_time = available_time
+    else:
+        preferred = profile.get("preferred_study_time", {})
+        if isinstance(preferred, dict):
+            key = "weekend" if day_date.weekday() >= 5 else "weekday"
+            values = preferred.get(key) or preferred.get("weekday") or preferred.get("weekend")
+            if isinstance(values, list):
+                base_time = "；".join(str(value) for value in values)
+            elif values:
+                base_time = str(values)
+            else:
+                base_time = "晚上 19:30-22:00"
+        else:
+            base_time = "晚上 19:30-22:00"
+
+    day_name = day_date.strftime("%A")
+    courses = [course for course in _load_course_schedule() if course.get("day_of_week") == day_name]
+    if not courses:
+        return base_time
+
+    busy_slots = "；".join(
+        f"{course.get('start_time')}-{course.get('end_time')} {course.get('course_name')}"
+        for course in courses
+    )
+    return f"{base_time}（已参考课程表，避开上课时间：{busy_slots}）"
+
+
+def _build_learning_topic(topics: list[str], day_index: int, goal: str) -> str:
+    topic = topics[(day_index - 1) % len(topics)]
+    return f"{topic}：围绕“{goal}”补齐核心知识点"
+
+
+def generate_study_plan_func(
+    goal: str | None = None,
+    days: int = 7,
+    available_time: str | None = None,
+    focus_topics: str | None = None,
+) -> str:
+    """Generate a structured study plan from local mock student profile and course schedule.
+
+    Useful when students ask for study plans, interview preparation, exam review,
+    internship preparation, weekly planning, or today's study schedule. Uses
+    student_profile.json for major, grade, goals, skills, learning style, and
+    constraints, and course_schedule.json to avoid scheduled class time.
+    """
+
+    profile = _load_student_profile()
+    normalized_days = max(1, min(int(days or 7), 30))
+    target_goal = goal or profile.get("current_goal") or "完成阶段性学习目标"
+    topics = _split_focus_topics(focus_topics, profile)
+    start_date = date.today()
+
+    daily_plan = []
+    for index in range(1, normalized_days + 1):
+        day_date = start_date + timedelta(days=index - 1)
+        topic = _build_learning_topic(topics, index, target_goal)
+        daily_plan.append(
+            {
+                "day": f"Day {index}（{day_date.isoformat()}，{day_date.strftime('%A')}）",
+                "available_time": _preferred_time_for_day(day_date, profile, available_time),
+                "learning_topic": topic,
+                "practice_task": f"完成一个与“{topics[(index - 1) % len(topics)]}”相关的小任务，并记录关键代码、命令或解题过程。",
+                "review_task": "用 10-15 分钟复盘今天的卡点、产出和明天要继续的问题。",
+                "expected_output": f"形成 1 份关于“{topics[(index - 1) % len(topics)]}”的学习笔记或可展示成果。",
+            }
+        )
+
+    if normalized_days == 1:
+        plan_title = f"{target_goal}：当天学习计划"
+    elif normalized_days >= 30:
+        plan_title = f"{target_goal}：30 天阶段性学习计划"
+    else:
+        plan_title = f"{target_goal}：{normalized_days} 天学习计划"
+
+    weekly_available_hours = profile.get("weekly_available_hours", "未提供")
+    learning_style = profile.get("learning_style", "未提供")
+    constraints = profile.get("constraints", [])
+    constraints_text = "；".join(str(item) for item in constraints) if isinstance(constraints, list) else str(constraints)
+
+    plan = {
+        "plan_title": plan_title,
+        "goal": target_goal,
+        "duration_days": normalized_days,
+        "daily_plan": daily_plan,
+        "final_suggestion": (
+            f"该计划参考了学生画像：{profile.get('grade', '未知年级')}、{profile.get('major', '未知专业')}，"
+            f"每周可用学习时间约 {weekly_available_hours} 小时，学习风格为：{learning_style}。"
+            f"安排时已参考课程表，尽量避开上课时间。约束条件：{constraints_text or '暂无'}。"
+            "不要把本计划视为学校正式安排，可根据课程作业、考试通知和个人状态滚动调整。"
+        ),
+    }
+    return json.dumps(plan, ensure_ascii=False, indent=2)
+
+
+generate_study_plan: BaseTool = tool(generate_study_plan_func)
+generate_study_plan.name = "generate_study_plan"
 
 
 # Format retrieved documents
