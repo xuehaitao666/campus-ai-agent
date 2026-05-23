@@ -120,13 +120,18 @@ def get_course_schedule_func(
     time_period: str | None = None,
     course_name: str | None = None,
 ) -> str:
-    """Query the local mock course schedule.
+    """Campus course schedule lookup tool.
 
-    Useful when students ask about courses, class time, classroom, teacher,
-    course type, weeks, or daily schedule. All parameters are optional and
-    can be combined. Use day for weekday values such as "周一" or "Monday",
-    time_period for values such as "上午", "下午", or "晚上", and course_name
-    for fuzzy course title keywords such as "数据结构".
+    Use this tool whenever the user asks about course arrangements, class time,
+    classroom/location, teacher, whether they have class on a certain day, what
+    classes are in the morning/afternoon/evening, or where a specific course is
+    held. It reads local mock course data, not a real educational administration
+    system.
+
+    Args:
+        day: Optional weekday filter, such as "周一", "周二", "星期三", or "Monday".
+        time_period: Optional time filter, such as "上午", "下午", or "晚上".
+        course_name: Optional fuzzy course-name keyword, such as "数据结构" or "人工智能".
     """
 
     courses = _load_course_schedule()
@@ -225,15 +230,19 @@ def get_campus_events_func(
     event_type: str | None = None,
     target_audience: str | None = None,
 ) -> str:
-    """Query local mock campus events.
+    """Campus event lookup tool.
 
-    Useful when students ask about campus activities, lectures, competitions,
-    clubs, recruitment events, workshops, or registration methods. All
-    parameters are optional and can be combined. Use keyword for fuzzy matching
-    in title, keywords, and description; date_range for values such as "今天",
-    "明天", "本周", or "最近"; event_type for values such as "讲座", "比赛",
-    "社团", "招聘", or "工作坊"; and target_audience for audience keywords such
-    as "软件工程", "计算机", or "人工智能".
+    Use this tool whenever the user asks about campus activities, lectures,
+    competitions, club events, recruitment fairs, workshops, event time, event
+    location, suitable audience, organizers, or registration methods. It reads
+    local mock event data, not a real campus activity platform.
+
+    Args:
+        keyword: Optional keyword matched against title, keywords, and description,
+            such as "AI", "Agent", "实习", "比赛", or "报名".
+        date_range: Optional date range, such as "今天", "明天", "本周", or "最近".
+        event_type: Optional event type, such as "讲座", "比赛", "社团", "招聘", or "工作坊".
+        target_audience: Optional audience keyword, such as "软件工程", "计算机", or "人工智能".
     """
 
     events = sorted(_load_campus_events(), key=lambda event: (event["date"], event["start_time"]))
@@ -356,12 +365,20 @@ def generate_study_plan_func(
     available_time: str | None = None,
     focus_topics: str | None = None,
 ) -> str:
-    """Generate a structured study plan from local mock student profile and course schedule.
+    """Study plan generation tool.
 
-    Useful when students ask for study plans, interview preparation, exam review,
-    internship preparation, weekly planning, or today's study schedule. Uses
-    student_profile.json for major, grade, goals, skills, learning style, and
-    constraints, and course_schedule.json to avoid scheduled class time.
+    Use this tool whenever the user asks for a study plan, exam preparation,
+    interview preparation, internship preparation, today's learning arrangement,
+    weekly planning, or a plan that should consider the course schedule. It
+    combines local mock student profile data and local mock course schedule data
+    to produce a structured plan. It does not know real exams or official school
+    arrangements unless the user provides them.
+
+    Args:
+        goal: Optional learning goal, such as "AI Agent 实习面试" or "期末复习".
+        days: Number of days for the plan, such as 1, 7, 14, or 30. Defaults to 7.
+        available_time: Optional user-provided available time, such as "晚上", "周末", or "今天下午".
+        focus_topics: Optional focus topics, such as "LangGraph, FastAPI, RAG, Docker".
     """
 
     profile = _load_student_profile()
