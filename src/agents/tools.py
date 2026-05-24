@@ -14,6 +14,9 @@ CAMPUS_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "campus"
 COURSE_SCHEDULE_PATH = CAMPUS_DATA_DIR / "course_schedule.json"
 CAMPUS_EVENTS_PATH = CAMPUS_DATA_DIR / "campus_events.json"
 STUDENT_PROFILE_PATH = CAMPUS_DATA_DIR / "student_profile.json"
+CAMPUS_POLICY_VECTOR_STORE_DIR = (
+    Path(__file__).resolve().parents[2] / "data" / "vector_store" / "campus_policy"
+)
 
 
 def calculator_func(expression: str) -> str:
@@ -446,7 +449,14 @@ generate_study_plan.name = "generate_study_plan"
 
 # Format retrieved documents
 def format_contexts(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
+    formatted_docs = []
+    for index, doc in enumerate(docs, 1):
+        source = doc.metadata.get("source", "unknown")
+        chunk_id = doc.metadata.get("chunk_id", f"chunk-{index}")
+        formatted_docs.append(
+            f"--- Source: {source} | Chunk: {chunk_id} ---\n{doc.page_content}"
+        )
+    return "\n\n".join(formatted_docs)
 
 
 def load_chroma_db():
@@ -458,14 +468,17 @@ def load_chroma_db():
             "Failed to initialize OpenAIEmbeddings. Ensure the OpenAI API key is set."
         ) from e
 
-    # Load the stored vector database
-    chroma_db = Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
+    # Load the stored campus policy vector database
+    chroma_db = Chroma(
+        persist_directory=str(CAMPUS_POLICY_VECTOR_STORE_DIR),
+        embedding_function=embeddings,
+    )
     retriever = chroma_db.as_retriever(search_kwargs={"k": 5})
     return retriever
 
 
 def database_search_func(query: str) -> str:
-    """Searches chroma_db for information in the company's handbook."""
+    """Searches the campus policy knowledge base for student handbook information."""
     # Get the chroma retriever
     retriever = load_chroma_db()
 
