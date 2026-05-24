@@ -1,5 +1,10 @@
 from agents.research_assistant import instructions
-from agents.tools import generate_study_plan, get_campus_events, get_course_schedule
+from agents.tools import (
+    generate_study_plan,
+    get_campus_events,
+    get_course_schedule,
+    query_campus_policy,
+)
 
 
 def test_prompt_routes_course_questions_to_course_tool():
@@ -46,14 +51,18 @@ def test_prompt_allows_direct_concept_answers():
 
 def test_prompt_blocks_unsupported_policy_hallucination():
     assert "请假" in instructions
-    assert "当前知识库中没有找到明确依据，建议以学校官方通知或辅导员答复为准" in instructions
+    assert "必须优先调用 query_campus_policy" in instructions
+    assert "知识库中未找到明确依据" in instructions
     assert "不要编造学校规定" in instructions
+    assert "不要声称查询了真实学校系统" in instructions
 
 
 def test_prompt_requires_structured_answers_after_tool_results():
     assert "课程查询：用清晰条目列出课程名、时间、地点/教室、教师、课程类型、周次、备注" in instructions
     assert "活动查询：用清晰条目列出活动名、时间、地点、类型、适合人群、主办方、报名方式、简介" in instructions
     assert "学习计划：用结构化格式列出学习时间、学习主题、实践任务、复盘任务、预期产出" in instructions
+    assert "制度问答：按“简要结论、依据说明、办理流程、注意事项、来源文档”组织回答" in instructions
+    assert "区分“制度明确规定”和“建议性提醒”" in instructions
     assert "如果工具返回没有匹配结果" in instructions
 
 
@@ -61,6 +70,7 @@ def test_tool_descriptions_are_routing_friendly():
     course_description = get_course_schedule.description
     event_description = get_campus_events.description
     plan_description = generate_study_plan.description
+    policy_description = query_campus_policy.description
 
     assert "course arrangements" in course_description
     assert "classroom/location" in course_description
@@ -76,3 +86,8 @@ def test_tool_descriptions_are_routing_friendly():
     assert "course schedule" in plan_description
     assert "student profile" in plan_description
     assert {"goal", "days", "available_time", "focus_topics"} == set(generate_study_plan.args)
+
+    assert "Campus policy RAG question answering tool" in policy_description
+    assert "leave requests" in policy_description
+    assert "scholarship eligibility" in policy_description
+    assert {"query"} == set(query_campus_policy.args)

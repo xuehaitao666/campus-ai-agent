@@ -489,6 +489,118 @@ def load_chroma_db():
     return retriever
 
 
+def _extract_policy_snippets(documents, keyword: str) -> list[str]:
+    snippets = []
+    for doc in documents:
+        lines = [line.strip() for line in doc.page_content.splitlines() if line.strip()]
+        matched_lines = [line for line in lines if keyword in line][:3]
+        if matched_lines:
+            snippets.extend(matched_lines)
+            continue
+        snippets.extend(lines[:3])
+    return snippets[:6]
+
+
+def _format_policy_sources(documents) -> str:
+    sources = []
+    for doc in documents:
+        source = doc.metadata.get("source", "unknown")
+        chunk_id = doc.metadata.get("chunk_id", "")
+        source_text = f"- {source}"
+        if chunk_id:
+            source_text += f"（{chunk_id}）"
+        if source_text not in sources:
+            sources.append(source_text)
+    return "\n".join(sources)
+
+
+def _policy_no_answer(reason: str) -> str:
+    return (
+        "## 简要结论\n"
+        "知识库中未找到明确依据。\n\n"
+        "## 依据说明\n"
+        f"{reason}\n\n"
+        "## 办理流程\n"
+        "知识库中未找到明确依据。\n\n"
+        "## 注意事项\n"
+        "建议以学校官方通知或辅导员答复为准。不要据此推断具体办理窗口、电话号码、网址或时间安排。\n\n"
+        "## 来源文档\n"
+        "无"
+    )
+
+
+def _has_relevant_policy_context(query: str, documents) -> bool:
+    corpus = " ".join(
+        f"{doc.page_content} {doc.metadata.get('source', '')}" for doc in documents
+    ).lower()
+    policy_keyword_groups = [
+        {"请假", "病假", "事假", "假"},
+        {"奖学金", "评奖", "挂科", "综测"},
+        {"宿舍", "晚归", "大功率", "电器"},
+        {"考试", "作弊", "缺考", "缓考", "旷考", "纪律"},
+        {"学生手册", "手册"},
+        {"材料", "证明"},
+        {"流程", "申请", "办理"},
+    ]
+    matched_groups = [group for group in policy_keyword_groups if any(word in query for word in group)]
+    if not matched_groups:
+        return bool(corpus.strip())
+    return any(any(word.lower() in corpus for word in group) for group in matched_groups)
+
+
+def query_campus_policy_func(query: str) -> str:
+    """Campus policy RAG question answering tool.
+
+    Use this tool when the user asks about campus policies or student handbook
+    rules, including leave requests, scholarship eligibility, dormitory
+    management, exam discipline, absence from exams, make-up exams, and student
+    handbook procedures. It retrieves from the local Chroma vector store built
+    from data/knowledge_base Markdown documents.
+
+    Args:
+        query: The user's campus policy question, such as "请假流程是什么？",
+            "挂科后还能评奖学金吗？", or "考试作弊有什么后果？".
+    """
+
+    retriever = load_chroma_db()
+    documents = retriever.invoke(query)
+
+    if not documents:
+        return _policy_no_answer("未检索到与该问题直接相关的校园制度文档片段。")
+
+    if not _has_relevant_policy_context(query, documents):
+        return _policy_no_answer("当前检索结果与问题相关性不足，当前依据不足。")
+
+    basis_snippets = _extract_policy_snippets(documents, "条件")
+    process_snippets = _extract_policy_snippets(documents, "流程")
+    note_snippets = _extract_policy_snippets(documents, "注意")
+
+    return (
+        "## 简要结论\n"
+        "已基于校园制度知识库检索结果整理如下。涉及未在检索片段中明确出现的细节，当前知识库未提供明确说明。\n\n"
+        "## 依据说明\n"
+        "### 制度明确规定\n"
+        + "\n".join(f"- {snippet}" for snippet in basis_snippets)
+        + "\n\n"
+        "### 建议性提醒\n"
+        "- 以下回答仅依据本地校园制度知识库检索片段，不代表查询了真实学校系统。\n"
+        "- 未在来源文档中明确出现的办理窗口、电话号码、网址或具体时间，当前知识库未提供明确说明。"
+        + "\n\n"
+        "## 办理流程\n"
+        + "\n".join(f"- {snippet}" for snippet in process_snippets)
+        + "\n\n"
+        "## 注意事项\n"
+        + "\n".join(f"- {snippet}" for snippet in note_snippets)
+        + "\n\n"
+        "## 来源文档\n"
+        + _format_policy_sources(documents)
+    )
+
+
+query_campus_policy: BaseTool = tool(query_campus_policy_func)
+query_campus_policy.name = "query_campus_policy"
+
+
 def database_search_func(query: str) -> str:
     """Searches the campus policy knowledge base for student handbook information."""
     # Get the chroma retriever

@@ -12,7 +12,13 @@ from langgraph.prebuilt import ToolNode
 
 from agents.campus_prompt import CAMPUS_AI_AGENT_SYSTEM_PROMPT
 from agents.safeguard import Safeguard, SafeguardOutput, SafetyAssessment
-from agents.tools import calculator, generate_study_plan, get_campus_events, get_course_schedule
+from agents.tools import (
+    calculator,
+    generate_study_plan,
+    get_campus_events,
+    get_course_schedule,
+    query_campus_policy,
+)
 from core import get_model, settings
 
 
@@ -27,7 +33,14 @@ class AgentState(MessagesState, total=False):
 
 
 web_search = DuckDuckGoSearchResults(name="WebSearch")
-tools = [web_search, calculator, get_course_schedule, get_campus_events, generate_study_plan]
+tools = [
+    web_search,
+    calculator,
+    get_course_schedule,
+    get_campus_events,
+    generate_study_plan,
+    query_campus_policy,
+]
 
 # Add weather tool if API key is set
 # Register for an API key at https://openweathermap.org/api/
@@ -49,6 +62,7 @@ instructions = f"""
     - get_course_schedule：本地 mock 课程表查询工具。
     - get_campus_events：本地 mock 校园活动查询工具。
     - generate_study_plan：基于本地 mock 学生画像和课程表的学习计划生成工具。
+    - query_campus_policy：基于本地 Chroma 向量库的校园制度 RAG 问答工具。
     - WebSearch、Calculator，以及在配置 OPENWEATHERMAP_API_KEY 后可用的 Weather。
 
     工具选择规则：
@@ -59,12 +73,17 @@ instructions = f"""
     3. 当用户询问学习计划、备考安排、面试准备、今日学习安排、本周学习规划、实习准备，或要求结合课程表安排学习时，必须优先调用 generate_study_plan。
        - 参数提取：goal 对应学习目标；days 对应计划天数；available_time 对应可用时间；focus_topics 对应重点主题，如 LangGraph、FastAPI、RAG、Docker。
     4. 当用户询问通用概念解释，例如 LangGraph、FastAPI、RAG、Docker 是什么，可以直接回答，不必调用工具。
-    5. 当用户询问学校制度、奖学金、请假、宿舍规定、考试纪律等内容时，如果当前没有 RAG 知识库或上下文依据，不要编造学校规定；应说明“当前知识库中没有找到明确依据，建议以学校官方通知或辅导员答复为准”。
+    5. 当用户询问学校制度、奖学金、请假、宿舍规定、考试纪律、缺考处理、学生手册等内容时，必须优先调用 query_campus_policy。
+       - 参数提取：query 使用用户完整的校园制度问题。
+       - 所有校园制度类回答必须基于 query_campus_policy 从 data/vector_store/campus_policy/ 检索到的结果。
+       - 如果工具返回“知识库中未找到明确依据”或“当前依据不足”，必须如实说明，不要编造学校规定。
+       - 不要声称查询了真实学校系统，不要编造办理窗口、电话号码、网址或具体时间。
 
     工具结果回答格式：
     - 课程查询：用清晰条目列出课程名、时间、地点/教室、教师、课程类型、周次、备注。
     - 活动查询：用清晰条目列出活动名、时间、地点、类型、适合人群、主办方、报名方式、简介。
     - 学习计划：用结构化格式列出学习时间、学习主题、实践任务、复盘任务、预期产出，并给出最终建议。
+    - 制度问答：按“简要结论、依据说明、办理流程、注意事项、来源文档”组织回答；区分“制度明确规定”和“建议性提醒”，并列出来源文档名称。
     - 如果工具返回没有匹配结果，必须如实说明没有查到相关信息，不要编造课程、活动、制度或学校安排。
 
     真实性边界：
