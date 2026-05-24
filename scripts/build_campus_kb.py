@@ -6,13 +6,13 @@ from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KNOWLEDGE_BASE_DIR = PROJECT_ROOT / "data" / "knowledge_base"
 DEFAULT_VECTOR_STORE_DIR = PROJECT_ROOT / "data" / "vector_store" / "campus_policy"
+DEFAULT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_CHUNK_SIZE = 800
 DEFAULT_CHUNK_OVERLAP = 120
 
@@ -32,7 +32,7 @@ def load_markdown_documents(knowledge_base_dir: Path | str) -> list[Document]:
                 page_content=content,
                 metadata={
                     "source": md_path.name,
-                    "full_path": str(md_path.resolve()),
+                    "path": str(md_path.resolve()),
                 },
             )
         )
@@ -66,10 +66,29 @@ def split_markdown_documents(
     return chunks
 
 
+def create_local_embeddings(model_name: str = DEFAULT_EMBEDDING_MODEL) -> Embeddings:
+    """Create local HuggingFace embeddings without requiring OpenAI credentials."""
+
+    try:
+        from langchain_huggingface import HuggingFaceEmbeddings
+    except ImportError as e:
+        raise RuntimeError(
+            "Missing local embedding dependencies. Install langchain-huggingface "
+            "and sentence-transformers before building the campus knowledge base."
+        ) from e
+
+    return HuggingFaceEmbeddings(
+        model_name=model_name,
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True},
+    )
+
+
 def build_campus_knowledge_base(
     knowledge_base_dir: Path | str = DEFAULT_KNOWLEDGE_BASE_DIR,
     vector_store_dir: Path | str = DEFAULT_VECTOR_STORE_DIR,
     embeddings: Embeddings | None = None,
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     delete_existing: bool = True,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
@@ -89,7 +108,7 @@ def build_campus_knowledge_base(
         shutil.rmtree(store_dir)
     store_dir.mkdir(parents=True, exist_ok=True)
 
-    embedding_function = embeddings or OpenAIEmbeddings()
+    embedding_function = embeddings or create_local_embeddings(embedding_model)
     vector_store = Chroma.from_documents(
         documents=chunks,
         embedding=embedding_function,
@@ -115,6 +134,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
     parser.add_argument("--chunk-overlap", type=int, default=DEFAULT_CHUNK_OVERLAP)
     parser.add_argument(
+        "--embedding-model",
+        default=DEFAULT_EMBEDDING_MODEL,
+        help="Local sentence-transformers model used for embeddings.",
+    )
+    parser.add_argument(
         "--keep-existing",
         action="store_true",
         help="Append to the existing vector store instead of rebuilding it.",
@@ -128,6 +152,7 @@ def main() -> None:
     vector_store = build_campus_knowledge_base(
         knowledge_base_dir=args.knowledge_base_dir,
         vector_store_dir=args.vector_store_dir,
+        embedding_model=args.embedding_model,
         delete_existing=not args.keep_existing,
         chunk_size=args.chunk_size,
         chunk_overlap=args.chunk_overlap,

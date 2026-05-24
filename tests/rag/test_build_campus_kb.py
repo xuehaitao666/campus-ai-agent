@@ -1,3 +1,5 @@
+import sys
+import types
 from pathlib import Path
 
 from langchain_core.embeddings import Embeddings
@@ -6,6 +8,7 @@ from scripts.build_campus_kb import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
     build_campus_knowledge_base,
+    create_local_embeddings,
     load_markdown_documents,
     split_markdown_documents,
 )
@@ -34,7 +37,7 @@ def test_load_markdown_documents_recursively_with_source_metadata(tmp_path):
         "leave_policy.md",
         "exam_policy.md",
     }
-    assert all(Path(doc.metadata["full_path"]).is_absolute() for doc in documents)
+    assert all(Path(doc.metadata["path"]).is_absolute() for doc in documents)
 
 
 def test_split_markdown_documents_adds_chunk_metadata():
@@ -48,9 +51,31 @@ def test_split_markdown_documents_adds_chunk_metadata():
 
     assert chunks
     assert all("source" in chunk.metadata for chunk in chunks)
-    assert all("full_path" in chunk.metadata for chunk in chunks)
+    assert all("path" in chunk.metadata for chunk in chunks)
     assert all("chunk_id" in chunk.metadata for chunk in chunks)
     assert all(chunk.metadata["chunk_id"].startswith(chunk.metadata["source"]) for chunk in chunks)
+
+
+def test_create_local_embeddings_does_not_require_openai_api_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    class FakeHuggingFaceEmbeddings(Embeddings):
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0] for _ in texts]
+
+        def embed_query(self, text: str) -> list[float]:
+            return [1.0, 0.0]
+
+    fake_module = types.SimpleNamespace(HuggingFaceEmbeddings=FakeHuggingFaceEmbeddings)
+    monkeypatch.setitem(sys.modules, "langchain_huggingface", fake_module)
+
+    embeddings = create_local_embeddings()
+
+    assert isinstance(embeddings, Embeddings)
+    assert embeddings.kwargs["model_name"] == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 
 def test_build_campus_knowledge_base_persists_chroma_index(tmp_path):
