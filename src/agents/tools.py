@@ -7,7 +7,6 @@ from pathlib import Path
 import numexpr
 from langchain_chroma import Chroma
 from langchain_core.tools import BaseTool, tool
-from langchain_openai import OpenAIEmbeddings
 
 
 CAMPUS_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "campus"
@@ -17,6 +16,7 @@ STUDENT_PROFILE_PATH = CAMPUS_DATA_DIR / "student_profile.json"
 CAMPUS_POLICY_VECTOR_STORE_DIR = (
     Path(__file__).resolve().parents[2] / "data" / "vector_store" / "campus_policy"
 )
+CAMPUS_POLICY_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 
 def calculator_func(expression: str) -> str:
@@ -452,21 +452,33 @@ def format_contexts(docs):
     formatted_docs = []
     for index, doc in enumerate(docs, 1):
         source = doc.metadata.get("source", "unknown")
+        path = doc.metadata.get("path", "")
         chunk_id = doc.metadata.get("chunk_id", f"chunk-{index}")
         formatted_docs.append(
-            f"--- Source: {source} | Chunk: {chunk_id} ---\n{doc.page_content}"
+            f"--- Source: {source} | Path: {path} | Chunk: {chunk_id} ---\n{doc.page_content}"
         )
     return "\n\n".join(formatted_docs)
 
 
+def create_campus_policy_embeddings():
+    try:
+        from langchain_huggingface import HuggingFaceEmbeddings
+    except ImportError as e:
+        raise RuntimeError(
+            "Failed to initialize local HuggingFace embeddings. "
+            "Install langchain-huggingface and sentence-transformers."
+        ) from e
+
+    return HuggingFaceEmbeddings(
+        model_name=CAMPUS_POLICY_EMBEDDING_MODEL,
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True},
+    )
+
+
 def load_chroma_db():
     # Create the embedding function for our project description database
-    try:
-        embeddings = OpenAIEmbeddings()
-    except Exception as e:
-        raise RuntimeError(
-            "Failed to initialize OpenAIEmbeddings. Ensure the OpenAI API key is set."
-        ) from e
+    embeddings = create_campus_policy_embeddings()
 
     # Load the stored campus policy vector database
     chroma_db = Chroma(
