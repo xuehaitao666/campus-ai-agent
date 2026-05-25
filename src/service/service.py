@@ -25,6 +25,11 @@ from langsmith import uuid7
 from agents import DEFAULT_AGENT, AgentGraph, get_agent, get_all_agent_info, load_agent
 from agents.tools import get_campus_events_func, get_course_schedule_func
 from core import settings
+from core.response_templates import (
+    format_course_fast_path_response,
+    format_event_fast_path_response,
+    format_fast_path_error,
+)
 from core.router import RouteIntent, parse_course_query, parse_event_query, route_query
 from core.tracing import (
     TraceRecord,
@@ -189,8 +194,13 @@ def _maybe_handle_course_fast_path(
     trace_record.completion_tokens = 0
     trace_record.total_tokens = 0
 
-    with TraceSpan() as tool_timer:
-        content = get_course_schedule_func(**parameters)
+    try:
+        with TraceSpan() as tool_timer:
+            tool_result = get_course_schedule_func(**parameters)
+        content = format_course_fast_path_response(user_input.message, parameters, tool_result)
+    except Exception as error:
+        trace_record.error_message = str(error)
+        content = format_fast_path_error("course", str(error))
     trace_record.tool_time_ms = tool_timer.elapsed_ms
 
     return ChatMessage(type="ai", content=content, run_id=str(run_id))
@@ -219,8 +229,13 @@ def _maybe_handle_event_fast_path(
     trace_record.completion_tokens = 0
     trace_record.total_tokens = 0
 
-    with TraceSpan() as tool_timer:
-        content = get_campus_events_func(**parameters)
+    try:
+        with TraceSpan() as tool_timer:
+            tool_result = get_campus_events_func(**parameters)
+        content = format_event_fast_path_response(user_input.message, parameters, tool_result)
+    except Exception as error:
+        trace_record.error_message = str(error)
+        content = format_fast_path_error("event", str(error))
     trace_record.tool_time_ms = tool_timer.elapsed_ms
 
     return ChatMessage(type="ai", content=content, run_id=str(run_id))
