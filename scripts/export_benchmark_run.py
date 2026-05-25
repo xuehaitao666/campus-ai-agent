@@ -13,15 +13,33 @@ DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "docs" / "optimization" / "benchmark_runs"
 DEFAULT_LAST = 15
 
 
-def load_trace_records(
-    trace_file: Path | str, last: int = DEFAULT_LAST
-) -> tuple[list[dict[str, Any]], int]:
-    """Load the latest valid trace records and count malformed JSON lines."""
+def is_request_trace(record: dict[str, Any]) -> bool:
+    """Identify top-level request records, preferring explicit trace metadata."""
+    event_type = record.get("event_type")
+    if event_type is not None:
+        return event_type == "request"
+
+    trace_type = record.get("trace_type")
+    if trace_type is not None:
+        return trace_type == "request"
+
+    if record.get("parent_trace_id"):
+        return False
+
+    return all(
+        [
+            record.get("query"),
+            record.get("agent_id"),
+            record.get("route"),
+            record.get("total_latency_ms") is not None,
+        ]
+    )
+
+
+def _read_valid_trace_records(trace_file: Path | str) -> tuple[list[dict[str, Any]], int]:
     path = Path(trace_file)
     if not path.exists():
         raise FileNotFoundError(f"Trace file not found: {path}")
-    if last < 1:
-        raise ValueError("--last must be greater than 0")
 
     records: list[dict[str, Any]] = []
     skipped_count = 0
@@ -38,11 +56,67 @@ def load_trace_records(
             continue
         records.append(record)
 
+    return records, skipped_count
+
+
+def load_trace_records(
+    trace_file: Path | str, last: int = DEFAULT_LAST
+) -> tuple[list[dict[str, Any]], int]:
+    """Load the latest valid trace records and count malformed JSON lines."""
+    if last < 1:
+        raise ValueError("--last must be greater than 0")
+
+    records, skipped_count = _read_valid_trace_records(trace_file)
     return records[-last:], skipped_count
 
 
 def _request_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [record for record in records if record.get("event_type", "request") == "request"]
+    return [record for record in records if is_request_trace(record)]
+
+
+def select_trace_records(
+    trace_file: Path | str,
+    last: int = DEFAULT_LAST,
+    request_only: bool = False,
+    request_last: int | None = None,
+) -> tuple[list[dict[str, Any]], int, str, int | None, int]:
+    """Select records for one report and return selection metadata."""
+    if last < 1:
+        raise ValueError("--last must be greater than 0")
+    if request_last is not None and request_last < 1:
+        raise ValueError("--request-last must be greater than 0")
+
+    records, skipped_count = _read_valid_trace_records(trace_file)
+
+    if request_last is not None:
+        selected_reversed: list[dict[str, Any]] = []
+        skipped_child_event_count = 0
+        for record in reversed(records):
+            if is_request_trace(record):
+                selected_reversed.append(record)
+                if len(selected_reversed) == request_last:
+                    break
+            else:
+                skipped_child_event_count += 1
+        return (
+            list(reversed(selected_reversed)),
+            skipped_count,
+            "request-last",
+            request_last,
+            skipped_child_event_count,
+        )
+
+    if request_only:
+        selected = _request_records(records)[-last:]
+        return (
+            selected,
+            skipped_count,
+            "request-only",
+            last,
+            len(records) - len(_request_records(records)),
+        )
+
+    return records[-last:], skipped_count, "last", None, 0
 
 
 def _average(records: list[dict[str, Any]], key: str) -> float | None:
@@ -136,6 +210,9 @@ def render_markdown(
     records: list[dict[str, Any]],
     trace_file: Path | str,
     skipped_count: int = 0,
+    selection_mode: str = "last",
+    requested_request_count: int | None = None,
+    skipped_child_event_count: int = 0,
     created_at: datetime | None = None,
     git_commit_hash: str | None = None,
 ) -> str:
@@ -155,9 +232,13 @@ def render_markdown(
         f"- created_at: {created_at.isoformat()}",
         f"- git commit hash: {commit_hash}",
         f"- trace file: {_display_path(trace_path)}",
+        f"- selection_mode: {selection_mode}",
+        f"- requested_request_count: {_value(requested_request_count)}",
+        f"- actual_request_count: {len(requests)}",
         f"- sample size: {len(records)} valid trace records",
         f"- request sample size: {len(requests)}",
         f"- child event count: {child_event_count}",
+        f"- skipped child event count: {skipped_child_event_count}",
         f"- skipped invalid JSON lines: {skipped_count}",
         f"- model list: {_unique_values(requests, 'model_name')}",
         f"- agent list: {_unique_values(requests, 'agent_id')}",
@@ -165,6 +246,14 @@ def render_markdown(
         "## 2. Summary",
         "",
     ]
+    if requested_request_count is not None and len(requests) < requested_request_count:
+        metadata_end = lines.index("## 2. Summary") - 1
+        lines.insert(
+            metadata_end,
+            "- request selection note: "
+            f"requested {requested_request_count} request-level traces, "
+            f"only {len(requests)} available",
+        )
     lines.extend(f"- {key}: {_value(value)}" for key, value in summary.items())
     lines.extend(
         [
@@ -219,6 +308,8 @@ def export_benchmark_run(
     last: int = DEFAULT_LAST,
     trace_file: Path | str = DEFAULT_TRACE_FILE,
     output_dir: Path | str = DEFAULT_OUTPUT_DIR,
+    request_only: bool = False,
+    request_last: int | None = None,
     created_at: datetime | None = None,
     git_commit_hash: str | None = None,
 ) -> Path:
@@ -227,7 +318,18 @@ def export_benchmark_run(
     if not safe_name:
         raise ValueError("--name must contain at least one filename-safe character")
 
-    records, skipped_count = load_trace_records(trace_file, last)
+    (
+        records,
+        skipped_count,
+        selection_mode,
+        requested_request_count,
+        skipped_child_event_count,
+    ) = select_trace_records(
+        trace_file,
+        last=last,
+        request_only=request_only,
+        request_last=request_last,
+    )
     created_at = created_at or datetime.now(UTC)
     output_path = Path(output_dir) / f"{created_at.date().isoformat()}_{safe_name}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -237,6 +339,9 @@ def export_benchmark_run(
             records=records,
             trace_file=trace_file,
             skipped_count=skipped_count,
+            selection_mode=selection_mode,
+            requested_request_count=requested_request_count,
+            skipped_child_event_count=skipped_child_event_count,
             created_at=created_at,
             git_commit_hash=git_commit_hash,
         ),
@@ -255,6 +360,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--last", type=int, default=DEFAULT_LAST, help="Number of latest trace records."
     )
+    parser.add_argument(
+        "--request-only",
+        action="store_true",
+        help="Filter child events before taking the latest --last request records.",
+    )
+    parser.add_argument(
+        "--request-last",
+        type=int,
+        help="Select the latest N request-level traces; takes precedence over --last.",
+    )
     parser.add_argument("--trace-file", type=Path, default=DEFAULT_TRACE_FILE)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     return parser.parse_args()
@@ -266,6 +381,8 @@ def main() -> int:
         output_path = export_benchmark_run(
             name=args.name,
             last=args.last,
+            request_only=args.request_only,
+            request_last=args.request_last,
             trace_file=args.trace_file,
             output_dir=args.output_dir,
         )

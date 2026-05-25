@@ -107,6 +107,18 @@ Phase 3.1 保留已有 `rag_retrieval` 子事件，并将资源加载耗时与�
 3. 对比 before / after 的 `rag_load_time_ms`、`retrieval_time_ms`、`total_latency_ms` 与召回 source。
 4. 始终同时运行 `tests/rag/test_retrieval_quality.py`，保证性能变化没有牺牲黄金问题的正确文档召回。
 
+### Benchmark Export Selection
+
+`--last N` 保留原有行为，适合查看日志末尾的原始 trace 窗口，其中可能同时包含 request 与 RAG child event。正式做优化前后对比时，建议使用 `--request-last N`，让报告稳定选择最近的 request-level 请求，避免 child event 占用样本窗口：
+
+```bash
+.venv/bin/python scripts/export_benchmark_run.py \
+  --name after_rag_retriever_cache_request_level \
+  --request-last 5
+```
+
+`--request-only --last N` 也会排除 child event，再取最近 `N` 条请求；`--request-last N` 的意图更直接，推荐作为后续正式 benchmark 的默认写法。若当前 trace 中可用 request 数少于目标数量，导出的 Run Metadata 会同时展示请求数量差异并给出说明。
+
 ## 8. Future Work
 
 Phase 3.1 刻意不处理回答质量与召回策略。后续可在独立阶段评估 no-answer 行为、Markdown 标题切分、metadata 增强、检索评估扩展或 Hybrid Retrieval；这些改动需要各自的召回质量与回答质量基线，不能与本次缓存收益混为一谈。
