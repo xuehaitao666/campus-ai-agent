@@ -3,6 +3,7 @@ import logging
 import math
 import re
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 
 import numexpr
@@ -471,6 +472,7 @@ def format_contexts(docs):
     return "\n\n".join(formatted_docs)
 
 
+@lru_cache(maxsize=1)
 def create_campus_policy_embeddings():
     try:
         from langchain_huggingface import HuggingFaceEmbeddings
@@ -491,7 +493,8 @@ def _record_rag_trace(
     route: str,
     query: str | None,
     documents,
-    elapsed_ms: float,
+    retrieval_time_ms: float,
+    rag_load_time_ms: float | None = None,
     error_message: str | None = None,
     update_request: bool = True,
 ) -> None:
@@ -520,7 +523,8 @@ def _record_rag_trace(
         route=route,
         tool_calls=[{"name": route, "args": {"query": query} if query else {}}],
         retrieved_docs=retrieved_docs,
-        retrieval_time_ms=elapsed_ms,
+        rag_load_time_ms=rag_load_time_ms,
+        retrieval_time_ms=retrieval_time_ms,
         error_message=error_message,
         event_type="rag_retrieval",
         returned_doc_count=len(retrieved_docs) if documents is not None else None,
@@ -536,8 +540,13 @@ def _record_rag_trace(
     if not update_request:
         return
     request_record.retrieved_docs.extend(retrieved_docs)
-    request_record.retrieval_time_ms = (request_record.retrieval_time_ms or 0) + elapsed_ms
-    request_record.tool_time_ms = (request_record.tool_time_ms or 0) + elapsed_ms
+    request_record.rag_load_time_ms = (request_record.rag_load_time_ms or 0) + (
+        rag_load_time_ms or 0
+    )
+    request_record.retrieval_time_ms = (request_record.retrieval_time_ms or 0) + retrieval_time_ms
+    request_record.tool_time_ms = (
+        (request_record.tool_time_ms or 0) + retrieval_time_ms + (rag_load_time_ms or 0)
+    )
     if error_message and request_record.error_message is None:
         request_record.error_message = error_message
     if not any(
@@ -547,6 +556,7 @@ def _record_rag_trace(
         request_record.tool_calls.append({"name": route, "args": {"query": query} if query else {}})
 
 
+@lru_cache(maxsize=1)
 def load_chroma_db():
     timer = TraceSpan().start()
     try:
@@ -565,6 +575,7 @@ def load_chroma_db():
             None,
             None,
             timer.stop(),
+            rag_load_time_ms=timer.elapsed_ms,
             error_message=str(e),
             update_request=False,
         )
@@ -574,9 +585,16 @@ def load_chroma_db():
         None,
         None,
         timer.stop(),
+        rag_load_time_ms=timer.elapsed_ms,
         update_request=False,
     )
     return retriever
+
+
+def clear_rag_cache() -> None:
+    """Release cached campus-policy retrieval resources after index updates."""
+    load_chroma_db.cache_clear()
+    create_campus_policy_embeddings.cache_clear()
 
 
 def _extract_policy_snippets(documents, keyword: str) -> list[str]:
@@ -654,14 +672,34 @@ def query_campus_policy_func(query: str) -> str:
             "挂科后还能评奖学金吗？", or "考试作弊有什么后果？".
     """
 
-    timer = TraceSpan().start()
+    load_timer = TraceSpan().start()
     try:
         retriever = load_chroma_db()
+        rag_load_time_ms = load_timer.stop()
+        retrieval_timer = TraceSpan().start()
         documents = retriever.invoke(query)
     except Exception as e:
-        _record_rag_trace("query_campus_policy", query, [], timer.stop(), error_message=str(e))
+        if load_timer.elapsed_ms is None:
+            rag_load_time_ms = load_timer.stop()
+            retrieval_time_ms = 0.0
+        else:
+            retrieval_time_ms = retrieval_timer.stop()
+        _record_rag_trace(
+            "query_campus_policy",
+            query,
+            [],
+            retrieval_time_ms,
+            rag_load_time_ms=rag_load_time_ms,
+            error_message=str(e),
+        )
         raise
-    _record_rag_trace("query_campus_policy", query, documents, timer.stop())
+    _record_rag_trace(
+        "query_campus_policy",
+        query,
+        documents,
+        retrieval_timer.stop(),
+        rag_load_time_ms=rag_load_time_ms,
+    )
 
     if not documents:
         return _policy_no_answer("未检索到与该问题直接相关的校园制度文档片段。")
@@ -694,17 +732,37 @@ query_campus_policy.name = "query_campus_policy"
 
 def database_search_func(query: str) -> str:
     """Searches the campus policy knowledge base for student handbook information."""
-    timer = TraceSpan().start()
+    load_timer = TraceSpan().start()
     try:
         # Get the chroma retriever
         retriever = load_chroma_db()
+        rag_load_time_ms = load_timer.stop()
 
         # Search the database for relevant documents
+        retrieval_timer = TraceSpan().start()
         documents = retriever.invoke(query)
     except Exception as e:
-        _record_rag_trace("Database_Search", query, [], timer.stop(), error_message=str(e))
+        if load_timer.elapsed_ms is None:
+            rag_load_time_ms = load_timer.stop()
+            retrieval_time_ms = 0.0
+        else:
+            retrieval_time_ms = retrieval_timer.stop()
+        _record_rag_trace(
+            "Database_Search",
+            query,
+            [],
+            retrieval_time_ms,
+            rag_load_time_ms=rag_load_time_ms,
+            error_message=str(e),
+        )
         raise
-    _record_rag_trace("Database_Search", query, documents, timer.stop())
+    _record_rag_trace(
+        "Database_Search",
+        query,
+        documents,
+        retrieval_timer.stop(),
+        rag_load_time_ms=rag_load_time_ms,
+    )
 
     # Format the documents into a string
     context_str = format_contexts(documents)

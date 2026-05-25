@@ -32,6 +32,7 @@ class TraceRecord:
     total_latency_ms: float | None = None
     llm_time_ms: float | None = None
     tool_time_ms: float | None = None
+    rag_load_time_ms: float | None = None
     retrieval_time_ms: float | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
