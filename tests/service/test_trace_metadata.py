@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage
@@ -12,6 +13,29 @@ from core.tracing import (
     write_trace_jsonl,
 )
 from service import service as service_module
+
+REQUIRED_TRACE_FIELDS = {
+    "trace_id",
+    "run_id",
+    "thread_id",
+    "user_id",
+    "agent_id",
+    "model_name",
+    "query",
+    "route",
+    "tool_calls",
+    "retrieved_docs",
+    "total_latency_ms",
+    "llm_time_ms",
+    "tool_time_ms",
+    "retrieval_time_ms",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "fallback_triggered",
+    "error_message",
+    "created_at",
+}
 
 
 class FakeRetriever:
@@ -44,6 +68,7 @@ def test_trace_id_and_jsonl_record_allow_missing_token_usage(tmp_path):
     write_trace_jsonl(record, trace_path)
 
     stored_record = _read_records(trace_path)[0]
+    assert REQUIRED_TRACE_FIELDS <= set(stored_record)
     assert stored_record["trace_id"] == trace_id
     assert stored_record["prompt_tokens"] is None
     assert stored_record["completion_tokens"] is None
@@ -159,3 +184,17 @@ def test_rag_tool_writes_retrieval_event_in_request_context(monkeypatch, tmp_pat
     assert record["retrieval_time_ms"] >= 0
     assert record["is_empty_result"] is False
     assert request_record.retrieved_docs[0]["source"] == "leave_policy.md"
+
+
+def test_performance_baseline_document_contains_phase_one_sections():
+    document = Path("docs/optimization/performance_baseline.md").read_text(encoding="utf-8")
+
+    assert "# Campus AI Agent Phase 1: Performance Baseline" in document
+    assert "## Phase 1 目标" in document
+    assert "## 测试环境" in document
+    assert "## 测试问题集" in document
+    assert "## 当前 Trace 字段说明" in document
+    assert "## 当前已经能自动记录的字段" in document
+    assert "## 当前暂时为 null 或待补全的字段" in document
+    assert "## Baseline 表格" in document
+    assert "## 后续优化如何对比" in document

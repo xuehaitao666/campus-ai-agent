@@ -12,7 +12,32 @@ Phase 1 的目标是在不改变 Agent 回答、路由、检索和前端协议�
 
 本阶段不包含 Router、Prompt 拆分、RAG 缓存、Hybrid Retrieval、Fallback Model 或前端 Trace 展示。
 
-## 当前测试问题集
+## 测试环境
+
+| 项目 | 当前核查信息 |
+| --- | --- |
+| 核查日期 | 2026-05-25 |
+| Trace 文件 | `logs/agent_trace.jsonl` |
+| 已有记录数 | 127 条：`request` 123 条，`rag_retrieval` 4 条 |
+| 接口样本 | `/stream` 与测试过程产生的 `/invoke` |
+| 可观察模型样本 | `deepseek-chat` |
+| RAG 数据源 | `data/knowledge_base/*.md` 与本地 Chroma 向量库 |
+| 单元测试隔离方式 | fake agent / fake retriever / 临时 JSONL 路径 |
+
+当前日志同时包含自动化测试请求与少量真实 Agent 流式运行样本，因此可用于验证 Trace 字段完整性和取得第一批观测值，但还不能视为经过严格控制的性能压测结果。
+
+### JSONL 完整性核查
+
+对当前 `logs/agent_trace.jsonl` 的全部 127 条记录进行字段核查后：
+
+- 要求的 20 个核心字段在每条记录中均存在，缺失字段数为 `0`。
+- `request` 记录均已写入 `run_id` 与 `total_latency_ms`。
+- 已观察到 3 条请求记录可提供 `llm_time_ms` 及 token usage。
+- 已观察到 2 条请求记录回填 `tool_time_ms`，以及 4 条记录携带 `retrieved_docs`。
+- 已观察到 6 条异常路径记录写入 `error_message`。
+- RAG 初始化/检索子事件可独立记录 `retrieval_time_ms`，因此 `rag_retrieval` 事件的 `total_latency_ms` 按设计为 `null`。
+
+## 测试问题集
 
 ### 课程类问题
 
@@ -45,26 +70,27 @@ Phase 1 的目标是在不改变 Agent 回答、路由、检索和前端协议�
 | 考试作弊有什么后果？ | `exam_policy.md` | 检索耗时、来源命中 |
 | 生病缺考怎么办？ | `exam_policy.md` 或 `leave_policy.md` | 多来源问题召回稳定性 |
 
-## 需要记录的指标
+## 当前 Trace 字段说明
 
-| 指标 | 当前采集位置 | Phase 1 状态 |
+| 字段 | 当前采集位置 | 含义 |
 | --- | --- | --- |
-| `trace_id` | service | 已记录 |
-| `run_id` | service | 已记录 |
-| `thread_id` / `user_id` | service | 已记录 |
-| `agent_id` / `model_name` | service | 已记录 |
-| `query` / `route` | service 或 RAG event | 已记录 |
-| `total_latency_ms` | service | 已记录 |
-| `llm_time_ms` | `research_assistant` / `rag_assistant` model node | 已记录；仅这两个图内生效 |
-| `tool_time_ms` | RAG 工具 | 已记录；当前仅覆盖 RAG 检索工具 |
-| `retrieval_time_ms` | RAG 工具 | 已记录 |
-| `retrieved_docs` | RAG 工具 | 已记录 `source`、`path`、`chunk_id` |
-| `tool_calls` | Agent model node 与 RAG 工具 | 尽可能记录 |
-| token usage | 可用的模型 metadata | 模型未返回时为 `null` |
-| `fallback_triggered` | 预留字段 | 当前始终为 `false` |
-| `error_message` | service / RAG 工具 | 异常时记录 |
+| `trace_id` | service | 请求与 RAG 子事件的关联标识 |
+| `run_id` | service | LangGraph/LangChain 执行标识 |
+| `thread_id` / `user_id` | service | 会话与用户维度关联信息 |
+| `agent_id` / `model_name` | service | 执行 Agent 与模型信息 |
+| `query` / `route` | service 或 RAG event | 用户问题与调用路径，如 `invoke`、`stream`、`query_campus_policy` |
+| `tool_calls` | Agent model node / RAG 工具 | 已观察到的工具名与参数 |
+| `retrieved_docs` | RAG 工具 | 检索片段的 `source`、`path`、`chunk_id` |
+| `total_latency_ms` | service | 请求级总耗时 |
+| `llm_time_ms` | 两个校园 Agent 的 model node | 模型节点累计耗时 |
+| `tool_time_ms` | RAG 工具 | 当前为 RAG 查询工具耗时 |
+| `retrieval_time_ms` | RAG 工具 | retriever 初始化或查询耗时 |
+| token 字段 | AI message metadata | prompt、completion 与 total token |
+| `fallback_triggered` | 预留字段 | 是否发生 fallback |
+| `error_message` | service / RAG 工具 | 异常信息 |
+| `created_at` | tracing module | UTC ISO 时间戳 |
 
-## JSONL 事件说明
+### JSONL 事件说明
 
 `logs/agent_trace.jsonl` 当前包含两类记录：
 
@@ -75,15 +101,64 @@ Phase 1 的目标是在不改变 Agent 回答、路由、检索和前端协议�
 
 RAG 子事件与请求通过相同的 `trace_id` 关联。`load_chroma_db` 的初始化事件不会被解释为空检索结果；真正的查询事件会填写 `returned_doc_count`、`source_list`、`chunk_id_list` 与 `is_empty_result`。
 
-## 当前 Baseline 表格模板
+## 当前已经能自动记录的字段
 
-| 类别 | 问题 | agent_id | route | tool_calls | retrieved_sources | total_latency_ms | llm_time_ms | retrieval_time_ms | prompt_tokens | completion_tokens | error_message |
-| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| 课程 | 我周一上午有什么课？ | `research-assistant` | `invoke` |  |  |  |  |  |  |  |  |
-| 活动 | 最近有什么 AI 相关讲座？ | `research-assistant` | `invoke` |  |  |  |  |  |  |  |  |
-| 学习计划 | 帮我制定一份 7 天 AI Agent 学习计划。 | `research-assistant` | `invoke` |  |  |  |  |  |  |  |  |
-| 制度 RAG | 请假流程是什么？ | `rag-assistant` | `invoke` |  |  |  |  |  |  |  |  |
-| 制度 RAG | 生病缺考怎么办？ | `rag-assistant` | `invoke` |  |  |  |  |  |  |  |  |
+| 字段 | 当前真实日志验证结果 |
+| --- | --- |
+| `trace_id`、`run_id`、`thread_id`、`user_id` | `request` 记录已写入 |
+| `agent_id`、`model_name`、`query`、`route` | 已写入；可区分 `invoke` / `stream` 和 RAG 子事件 |
+| `total_latency_ms` | 全部 123 条 `request` 记录有值 |
+| `llm_time_ms` | 实际执行校园 Agent model node 的样本已有值 |
+| `tool_calls` | 真实课程/RAG 工具调用样本已有值 |
+| `retrieved_docs`、`retrieval_time_ms` | RAG 检索样本已有来源与耗时 |
+| `prompt_tokens`、`completion_tokens`、`total_tokens` | `deepseek-chat` 样本可读取 usage metadata |
+| `error_message` | 异常路径可以记录 |
+| `created_at` | 所有事件均写入 |
+
+## 当前暂时为 null 或待补全的字段
+
+| 字段或能力 | 当前现状 | TODO |
+| --- | --- | --- |
+| `llm_time_ms` | fake agent、static agent 或未接入 model node 的 Agent 为 `null` | TODO：按需统一其他 Agent 节点计时 |
+| `tool_time_ms` | 仅 RAG 查询工具目前能回填；课程、活动、学习计划工具为 `null` | TODO：后续统一普通工具计时 |
+| `retrieval_time_ms` / `retrieved_docs` | 非 RAG 请求为 `null` / 空列表，符合当前语义 | 无需强行填充 |
+| `prompt_tokens` / `completion_tokens` / `total_tokens` | mock 响应或不携带 usage metadata 的 provider 为 `null` | TODO：扩大 provider token metadata 覆盖 |
+| `fallback_triggered` | 字段存在但当前恒为 `false` | TODO：实现 Fallback 后采集触发状态 |
+| `route` | 请求与 RAG 子事件已有值 | TODO：若后续新增 Router，再扩展为业务意图路由 |
+
+## Baseline 表格
+
+下表中已有数值来自 2026-05-25 核查到的真实 Trace 样本；`待采集` 表示当前日志还没有该固定问题的可对比样本。
+
+### 课程类
+
+| 问题 | agent_id | route | tool_calls | total_latency_ms | llm_time_ms | prompt_tokens | completion_tokens | total_tokens |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 我周一有什么课 | `research-assistant` | `stream` | `get_course_schedule(day=周一)` | 3839.20 | 3794.81 | 5659 | 295 | 5954 |
+| 我周一上午有什么课？ | `research-assistant` | `invoke` | 待采集 | 待采集 | 待采集 | 待采集 | 待采集 | 待采集 |
+
+### 活动类
+
+| 问题 | agent_id | route | tool_calls | total_latency_ms | llm_time_ms | token usage |
+| --- | --- | --- | --- | ---: | ---: | --- |
+| 最近有什么 AI 相关讲座？ | `research-assistant` | `invoke` | 待采集 | 待采集 | 待采集 | 待采集 |
+| 最近有没有适合软件工程学生的活动？ | `research-assistant` | `invoke` | 待采集 | 待采集 | 待采集 | 待采集 |
+
+### 学习计划类
+
+| 问题 | agent_id | route | tool_calls | total_latency_ms | llm_time_ms | token usage |
+| --- | --- | --- | --- | ---: | ---: | --- |
+| 帮我制定一份 7 天 AI Agent 学习计划。 | `research-assistant` | `invoke` | 待采集 | 待采集 | 待采集 | 待采集 |
+| 结合我的课程表安排本周学习。 | `research-assistant` | `invoke` | 待采集 | 待采集 | 待采集 | 待采集 |
+
+### 制度 RAG 类
+
+| 问题 | agent_id | route | retrieved_sources | total_latency_ms | llm_time_ms | retrieval_time_ms | tokens |
+| --- | --- | --- | --- | ---: | ---: | ---: | --- |
+| 如果我数据结构不及格，还可以评奖学金吗 | `research-assistant` | `stream` | `scholarship_policy.md`, `exam_policy.md`, `leave_policy.md` | 23800.39 | 6083.19 | 17670.46 | 7311 |
+| 挂科了还能申请奖学金吗？ | `research-assistant` | `stream` | `scholarship_policy.md`, `leave_policy.md`, `student_handbook.md`, `exam_policy.md` | 19582.78 | 8845.88 | 10699.57 | 9217 |
+| 请假流程是什么？ | `rag-assistant` | `invoke` | 待采集 | 待采集 | 待采集 | 待采集 | 待采集 |
+| 生病缺考怎么办？ | `rag-assistant` | `invoke` | 待采集 | 待采集 | 待采集 | 待采集 | 待采集 |
 
 ## 后续优化如何对比
 
