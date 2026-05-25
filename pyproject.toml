@@ -91,7 +91,7 @@ target-version = "py311"
 extend-select = ["I", "U"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = [".", "src"]
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.pytest_env]
