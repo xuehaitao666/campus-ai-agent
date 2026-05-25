@@ -1,15 +1,22 @@
 import argparse
 import shutil
+import sys
+from collections import Counter
 from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from rag.chunking import markdown_heading_chunk  # noqa: E402
+from rag.document_cleaner import clean_markdown_text  # noqa: E402
+
 DEFAULT_KNOWLEDGE_BASE_DIR = PROJECT_ROOT / "data" / "knowledge_base"
 DEFAULT_VECTOR_STORE_DIR = PROJECT_ROOT / "data" / "vector_store" / "campus_policy"
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
@@ -26,7 +33,7 @@ def load_markdown_documents(knowledge_base_dir: Path | str) -> list[Document]:
 
     documents: list[Document] = []
     for md_path in sorted(kb_dir.rglob("*.md")):
-        content = md_path.read_text(encoding="utf-8")
+        content = clean_markdown_text(md_path.read_text(encoding="utf-8"))
         documents.append(
             Document(
                 page_content=content,
@@ -48,21 +55,16 @@ def split_markdown_documents(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
 ) -> list[Document]:
-    """Split Markdown Documents and attach stable chunk metadata."""
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        separators=["\n## ", "\n### ", "\n\n", "\n", "。", "，", " ", ""],
-    )
-    chunks = splitter.split_documents(documents)
-    source_counts: dict[str, int] = {}
-
-    for chunk in chunks:
-        source = str(chunk.metadata.get("source", "unknown"))
-        source_counts[source] = source_counts.get(source, 0) + 1
-        chunk.metadata["chunk_id"] = f"{source}::chunk-{source_counts[source]:04d}"
-
+    """Split cleaned Markdown documents by headings with enriched metadata."""
+    chunks: list[Document] = []
+    for document in documents:
+        chunks.extend(
+            markdown_heading_chunk(
+                document,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+        )
     return chunks
 
 
@@ -160,6 +162,16 @@ def main() -> None:
     count = vector_store._collection.count()
     print(f"Campus knowledge base index built at: {args.vector_store_dir}")
     print(f"Indexed chunks: {count}")
+    documents = load_markdown_documents(args.knowledge_base_dir)
+    chunks = split_markdown_documents(
+        documents,
+        chunk_size=args.chunk_size,
+        chunk_overlap=args.chunk_overlap,
+    )
+    chunk_counts = Counter(str(chunk.metadata["source"]) for chunk in chunks)
+    print("Chunks by source:")
+    for source, source_count in sorted(chunk_counts.items()):
+        print(f"- {source}: {source_count}")
 
 
 if __name__ == "__main__":

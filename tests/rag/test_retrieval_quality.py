@@ -10,7 +10,6 @@ from scripts.build_campus_kb import (
     build_campus_knowledge_base,
 )
 
-
 TOP_K = 3
 GOLDEN_QUESTIONS = [
     ("请假流程是什么？", {"leave_policy.md"}),
@@ -19,6 +18,12 @@ GOLDEN_QUESTIONS = [
     ("考试作弊有什么后果？", {"exam_policy.md"}),
     ("生病缺考怎么办？", {"exam_policy.md", "leave_policy.md"}),
 ]
+POLICY_TYPE_BY_SOURCE = {
+    "leave_policy.md": "leave",
+    "scholarship_policy.md": "scholarship",
+    "dormitory_policy.md": "dormitory",
+    "exam_policy.md": "exam",
+}
 
 
 class KeywordEmbeddings(Embeddings):
@@ -56,6 +61,12 @@ def correct_doc_recall(expected_sources: set[str], actual_sources: set[str]) -> 
     return bool(expected_sources & actual_sources)
 
 
+def correct_policy_type_recall(expected_sources: set[str], documents: list[Document]) -> bool:
+    expected_types = {POLICY_TYPE_BY_SOURCE[source] for source in expected_sources}
+    retrieved_types = {str(document.metadata["policy_type"]) for document in documents}
+    return bool(expected_types & retrieved_types)
+
+
 @pytest.fixture
 def campus_policy_retriever(tmp_path):
     vector_store = build_campus_knowledge_base(
@@ -85,6 +96,9 @@ def test_golden_question_retrieves_expected_policy_source(
         f"question={question!r}, expected_sources={expected_sources}, "
         f"retrieved_sources={actual_sources}"
     )
+    assert correct_policy_type_recall(expected_sources, documents)
+    assert all(document.metadata["section"] for document in documents)
+    assert all(document.metadata["heading_path"] for document in documents)
 
 
 def test_golden_question_correct_doc_recall_baseline(campus_policy_retriever):
@@ -98,6 +112,9 @@ def test_golden_question_correct_doc_recall_baseline(campus_policy_retriever):
                 "expected_sources": expected_sources,
                 "retrieved_sources": actual_sources,
                 "correct_doc_recall": correct_doc_recall(expected_sources, actual_sources),
+                "correct_policy_type_recall": correct_policy_type_recall(
+                    expected_sources, documents
+                ),
             }
         )
 
@@ -106,3 +123,4 @@ def test_golden_question_correct_doc_recall_baseline(campus_policy_retriever):
     # Offline deterministic baseline: build/split/persist/retrieve real Markdown sources.
     # Production multilingual embedding quality needs a separately enabled evaluation run.
     assert recall == 1.0, f"correct_doc_recall={recall:.2%}, evaluations={evaluations}"
+    assert all(item["correct_policy_type_recall"] for item in evaluations)

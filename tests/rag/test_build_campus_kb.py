@@ -26,7 +26,10 @@ def test_load_markdown_documents_recursively_with_source_metadata(tmp_path):
     kb_dir = tmp_path / "knowledge_base"
     nested_dir = kb_dir / "policies"
     nested_dir.mkdir(parents=True)
-    (kb_dir / "leave_policy.md").write_text("# 学生请假制度\n\n请假流程。", encoding="utf-8")
+    (kb_dir / "leave_policy.md").write_text(
+        "\r\n# 学生请假制度   \r\n\r\n\r\n\r\n请假流程。  \r\n",
+        encoding="utf-8",
+    )
     (nested_dir / "exam_policy.md").write_text("# 考试纪律\n\n考试规则。", encoding="utf-8")
     (nested_dir / "ignored.txt").write_text("ignore me", encoding="utf-8")
 
@@ -38,6 +41,8 @@ def test_load_markdown_documents_recursively_with_source_metadata(tmp_path):
         "exam_policy.md",
     }
     assert all(Path(doc.metadata["path"]).is_absolute() for doc in documents)
+    leave_document = next(doc for doc in documents if doc.metadata["source"] == "leave_policy.md")
+    assert leave_document.page_content == "# 学生请假制度\n\n请假流程。"
 
 
 def test_split_markdown_documents_adds_chunk_metadata():
@@ -53,7 +58,16 @@ def test_split_markdown_documents_adds_chunk_metadata():
     assert all("source" in chunk.metadata for chunk in chunks)
     assert all("path" in chunk.metadata for chunk in chunks)
     assert all("chunk_id" in chunk.metadata for chunk in chunks)
+    assert all("section" in chunk.metadata for chunk in chunks)
+    assert all("heading_path" in chunk.metadata for chunk in chunks)
+    assert all("policy_type" in chunk.metadata for chunk in chunks)
     assert all(chunk.metadata["chunk_id"].startswith(chunk.metadata["source"]) for chunk in chunks)
+    assert all(chunk.page_content.strip() for chunk in chunks)
+    assert {
+        chunk.metadata["policy_type"]
+        for chunk in chunks
+        if chunk.metadata["source"] == "exam_policy.md"
+    } == {"exam"}
 
 
 def test_create_local_embeddings_does_not_require_openai_api_key(monkeypatch):
@@ -75,7 +89,10 @@ def test_create_local_embeddings_does_not_require_openai_api_key(monkeypatch):
     embeddings = create_local_embeddings()
 
     assert isinstance(embeddings, Embeddings)
-    assert embeddings.kwargs["model_name"] == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    assert (
+        embeddings.kwargs["model_name"]
+        == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    )
 
 
 def test_build_campus_knowledge_base_persists_chroma_index(tmp_path):
@@ -101,3 +118,6 @@ def test_build_campus_knowledge_base_persists_chroma_index(tmp_path):
     assert results
     assert results[0].metadata["source"] == "leave_policy.md"
     assert "chunk_id" in results[0].metadata
+    assert results[0].metadata["policy_type"] == "leave"
+    assert results[0].metadata["section"]
+    assert results[0].metadata["heading_path"]
