@@ -18,7 +18,7 @@ Phase 1 的目标是在不改变 Agent 回答、路由、检索和前端协议�
 | --- | --- |
 | 核查日期 | 2026-05-25 |
 | Trace 文件 | `logs/agent_trace.jsonl` |
-| 已有记录数 | 127 条：`request` 123 条，`rag_retrieval` 4 条 |
+| 已有记录数 | 167 条：`request` 163 条，`rag_retrieval` 4 条 |
 | 接口样本 | `/stream` 与测试过程产生的 `/invoke` |
 | 可观察模型样本 | `deepseek-chat` |
 | RAG 数据源 | `data/knowledge_base/*.md` 与本地 Chroma 向量库 |
@@ -28,13 +28,13 @@ Phase 1 的目标是在不改变 Agent 回答、路由、检索和前端协议�
 
 ### JSONL 完整性核查
 
-对当前 `logs/agent_trace.jsonl` 的全部 127 条记录进行字段核查后：
+对当前 `logs/agent_trace.jsonl` 的全部 167 条记录进行字段核查后：
 
 - 要求的 20 个核心字段在每条记录中均存在，缺失字段数为 `0`。
 - `request` 记录均已写入 `run_id` 与 `total_latency_ms`。
 - 已观察到 3 条请求记录可提供 `llm_time_ms` 及 token usage。
 - 已观察到 2 条请求记录回填 `tool_time_ms`，以及 4 条记录携带 `retrieved_docs`。
-- 已观察到 6 条异常路径记录写入 `error_message`。
+- 已观察到 8 条异常路径记录写入 `error_message`。
 - RAG 初始化/检索子事件可独立记录 `retrieval_time_ms`，因此 `rag_retrieval` 事件的 `total_latency_ms` 按设计为 `null`。
 
 ## 测试问题集
@@ -107,7 +107,7 @@ RAG 子事件与请求通过相同的 `trace_id` 关联。`load_chroma_db` 的�
 | --- | --- |
 | `trace_id`、`run_id`、`thread_id`、`user_id` | `request` 记录已写入 |
 | `agent_id`、`model_name`、`query`、`route` | 已写入；可区分 `invoke` / `stream` 和 RAG 子事件 |
-| `total_latency_ms` | 全部 123 条 `request` 记录有值 |
+| `total_latency_ms` | 全部 163 条 `request` 记录有值 |
 | `llm_time_ms` | 实际执行校园 Agent model node 的样本已有值 |
 | `tool_calls` | 真实课程/RAG 工具调用样本已有值 |
 | `retrieved_docs`、`retrieval_time_ms` | RAG 检索样本已有来源与耗时 |
@@ -115,7 +115,7 @@ RAG 子事件与请求通过相同的 `trace_id` 关联。`load_chroma_db` 的�
 | `error_message` | 异常路径可以记录 |
 | `created_at` | 所有事件均写入 |
 
-## 当前暂时为 null 或待补全的字段
+## 当前仍为 TODO 的字段
 
 | 字段或能力 | 当前现状 | TODO |
 | --- | --- | --- |
@@ -126,32 +126,62 @@ RAG 子事件与请求通过相同的 `trace_id` 关联。`load_chroma_db` 的�
 | `fallback_triggered` | 字段存在但当前恒为 `false` | TODO：实现 Fallback 后采集触发状态 |
 | `route` | 请求与 RAG 子事件已有值 | TODO：若后续新增 Router，再扩展为业务意图路由 |
 
-## Baseline 表格
+## 真实 Trace 示例
+
+以下记录来自 `logs/agent_trace.jsonl` 中已实际运行的课程查询样本，不是模拟数据：
+
+```json
+{
+  "query": "我周一有什么课",
+  "route": "stream",
+  "agent_id": "research-assistant",
+  "model_name": "deepseek-chat",
+  "tool_calls": [{"name": "get_course_schedule", "args": {"day": "周一"}}],
+  "total_latency_ms": 3839.20,
+  "llm_time_ms": 3794.81,
+  "prompt_tokens": 5659,
+  "completion_tokens": 295,
+  "total_tokens": 5954
+}
+```
+
+该样本说明，即使是课程表可直接查询的简单问题，当前仍会经过完整 LLM 工具调用与回答链路。
+
+## 手动测试记录表
+
+后续进行同批问题的手动采集时，按以下模板逐次登记；没有真实运行结果的项继续保持 `TODO`，不以推断补值。
+
+| 测试日期 | 类别 | 问题 | agent_id | model_name | route | tool_calls | retrieved_sources | total_latency_ms | llm_time_ms | retrieval_time_ms | total_tokens | 备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| TODO | 课程 | 我周一上午有什么课？ | `research-assistant` | TODO | `invoke` | TODO | 不适用 | TODO | TODO | 不适用 | TODO | 待采集 |
+| TODO | 活动 | 最近有什么 AI 相关讲座？ | `research-assistant` | TODO | `invoke` | TODO | 不适用 | TODO | TODO | 不适用 | TODO | 待采集 |
+| TODO | 学习计划 | 帮我制定一份 7 天 AI Agent 学习计划。 | `research-assistant` | TODO | `invoke` | TODO | 不适用 | TODO | TODO | 不适用 | TODO | 待采集 |
+| TODO | RAG 制度 | 请假流程是什么？ | `rag-assistant` | TODO | `invoke` | TODO | TODO | TODO | TODO | TODO | TODO | 待采集 |
 
 下表中已有数值来自 2026-05-25 核查到的真实 Trace 样本；`待采集` 表示当前日志还没有该固定问题的可对比样本。
 
-### 课程类
+## 课程类 baseline
 
 | 问题 | agent_id | route | tool_calls | total_latency_ms | llm_time_ms | prompt_tokens | completion_tokens | total_tokens |
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | 我周一有什么课 | `research-assistant` | `stream` | `get_course_schedule(day=周一)` | 3839.20 | 3794.81 | 5659 | 295 | 5954 |
 | 我周一上午有什么课？ | `research-assistant` | `invoke` | 待采集 | 待采集 | 待采集 | 待采集 | 待采集 | 待采集 |
 
-### 活动类
+## 活动类 baseline
 
 | 问题 | agent_id | route | tool_calls | total_latency_ms | llm_time_ms | token usage |
 | --- | --- | --- | --- | ---: | ---: | --- |
 | 最近有什么 AI 相关讲座？ | `research-assistant` | `invoke` | 待采集 | 待采集 | 待采集 | 待采集 |
 | 最近有没有适合软件工程学生的活动？ | `research-assistant` | `invoke` | 待采集 | 待采集 | 待采集 | 待采集 |
 
-### 学习计划类
+## 学习计划类 baseline
 
 | 问题 | agent_id | route | tool_calls | total_latency_ms | llm_time_ms | token usage |
 | --- | --- | --- | --- | ---: | ---: | --- |
 | 帮我制定一份 7 天 AI Agent 学习计划。 | `research-assistant` | `invoke` | 待采集 | 待采集 | 待采集 | 待采集 |
 | 结合我的课程表安排本周学习。 | `research-assistant` | `invoke` | 待采集 | 待采集 | 待采集 | 待采集 |
 
-### 制度 RAG 类
+## RAG 制度问答 baseline
 
 | 问题 | agent_id | route | retrieved_sources | total_latency_ms | llm_time_ms | retrieval_time_ms | tokens |
 | --- | --- | --- | --- | ---: | ---: | ---: | --- |
@@ -160,7 +190,25 @@ RAG 子事件与请求通过相同的 `trace_id` 关联。`load_chroma_db` 的�
 | 请假流程是什么？ | `rag-assistant` | `invoke` | 待采集 | 待采集 | 待采集 | 待采集 | 待采集 |
 | 生病缺考怎么办？ | `rag-assistant` | `invoke` | 待采集 | 待采集 | 待采集 | 待采集 | 待采集 |
 
-## 后续优化如何对比
+## 当前观察到的性能问题
+
+### 简单课程查询仍消耗完整 LLM 链路
+
+真实样本 `我周一有什么课` 已命中 `get_course_schedule(day=周一)`，但仍记录到：
+
+- `total_latency_ms` 约 `3839 ms`
+- `llm_time_ms` 约 `3794 ms`
+- `prompt_tokens` 为 `5659`
+- `completion_tokens` 为 `295`
+- `total_tokens` 为 `5954`
+
+这说明简单、规则明确的课程查询当前仍依赖完整 LLM 选择工具并组织回复，LLM 时间几乎占据总耗时，且系统 prompt 与上下文带来了较高 token 消耗。后续 Phase 2 可以评估 `Rule-based Router + 模板化响应`：对高确定性的课程、活动等请求减少 LLM 调用或缩短 LLM 链路，并以本表中的延迟和 token 作为对比基线。
+
+### RAG 检索已有明显冷启动开销信号
+
+已采集的两个奖学金制度问题都正确召回了 `scholarship_policy.md`，但请求中的 `retrieval_time_ms` 分别约为 `17670 ms` 和 `10700 ms`。这只是当前真实样本的观察信号，尚不足以直接判定优化方案；后续需要固定问题集并区分冷启动、热请求后再作结论。
+
+## 后续优化阶段如何对比
 
 1. 固定问题集、运行环境、模型配置与 top-k 配置，先收集 Phase 1 数据。
 2. 每个问题重复执行多次，统计总耗时和检索耗时的均值、P50、P95。

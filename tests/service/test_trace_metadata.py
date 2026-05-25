@@ -195,6 +195,13 @@ def test_performance_baseline_document_contains_phase_one_sections():
     assert "## 测试问题集" in document
     assert "## 当前 Trace 字段说明" in document
     assert "## 当前已经能自动记录的字段" in document
-    assert "## 当前暂时为 null 或待补全的字段" in document
-    assert "## Baseline 表格" in document
-    assert "## 后续优化如何对比" in document
+    assert "## 当前仍为 TODO 的字段" in document
+    assert "## 真实 Trace 示例" in document
+    assert "## 手动测试记录表" in document
+    assert "## 课程类 baseline" in document
+    assert "## 活动类 baseline" in document
+    assert "## 学习计划类 baseline" in document
+    assert "## RAG 制度问答 baseline" in document
+    assert "## 当前观察到的性能问题" in document
+    assert "## 后续优化阶段如何对比" in document
+    assert "Rule-based Router + 模板化响应" in document
