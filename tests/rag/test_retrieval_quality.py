@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import pytest
@@ -45,7 +46,9 @@ class KeywordEmbeddings(Embeddings):
     ]
 
     def _embed(self, text: str) -> list[float]:
-        return [float(keyword in text) for keyword in self.vocabulary] + [1.0]
+        values = [float(keyword in text) for keyword in self.vocabulary]
+        norm = math.sqrt(sum(value * value for value in values)) or 1.0
+        return [value / norm for value in values]
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return [self._embed(text) for text in texts]

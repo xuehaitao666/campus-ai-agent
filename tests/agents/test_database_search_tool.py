@@ -49,6 +49,28 @@ def test_database_search_returns_retrieved_context_with_metadata(monkeypatch):
     assert "- leave_policy.md | leave_policy.md::chunk-0001 | /kb/leave_policy.md" in result
 
 
+def test_database_search_preserves_enriched_context_metadata(monkeypatch):
+    documents = [
+        Document(
+            page_content="考试作弊将按照考试纪律处理。",
+            metadata={
+                "source": "exam_policy.md",
+                "chunk_id": "exam_policy.md::chunk-0001",
+                "section": "作弊处理",
+                "heading_path": "考试纪律 > 作弊处理",
+                "policy_type": "exam",
+            },
+        )
+    ]
+    monkeypatch.setattr(campus_tools, "load_chroma_db", lambda: FakeRetriever(documents))
+
+    result = database_search_func("考试作弊有什么后果？")
+
+    assert "Section: 作弊处理" in result
+    assert "Heading Path: 考试纪律 > 作弊处理" in result
+    assert "Policy Type: exam" in result
+
+
 def test_database_search_tool_invokes_search_without_real_vector_store(monkeypatch):
     documents = [
         Document(

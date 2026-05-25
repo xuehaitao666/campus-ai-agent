@@ -12,6 +12,7 @@ from langchain_core.documents import Document
 from langchain_core.tools import BaseTool, tool
 
 from core import settings
+from core.token_budget import estimate_tokens, format_rag_context, select_context_docs
 from core.tracing import TraceRecord, TraceSpan, current_trace_record, write_trace_jsonl
 from rag.hybrid_retriever import BM25Index, build_bm25_index, hybrid_search
 
@@ -502,6 +503,8 @@ def _record_rag_trace(
     no_answer_triggered: bool | None = None,
     error_message: str | None = None,
     update_request: bool = True,
+    context_documents=None,
+    context_text: str = "",
 ) -> None:
     request_record = current_trace_record()
     if request_record is None:
@@ -545,6 +548,10 @@ def _record_rag_trace(
         is_empty_result=not retrieved_docs if documents is not None else None,
         is_low_relevance=is_low_relevance,
         no_answer_triggered=no_answer_triggered,
+        context_docs_count=len(context_documents or []),
+        context_chars=len(context_text),
+        estimated_context_tokens=estimate_tokens(context_text),
+        dropped_context_docs_count=max(0, len(documents or []) - len(context_documents or [])),
     )
     try:
         write_trace_jsonl(record)
@@ -565,6 +572,12 @@ def _record_rag_trace(
         request_record.is_low_relevance = is_low_relevance
     if no_answer_triggered is not None:
         request_record.no_answer_triggered = no_answer_triggered
+    request_record.context_docs_count = len(context_documents or [])
+    request_record.context_chars = len(context_text)
+    request_record.estimated_context_tokens = estimate_tokens(context_text)
+    request_record.dropped_context_docs_count = max(
+        0, len(documents or []) - len(context_documents or [])
+    )
     if error_message and request_record.error_message is None:
         request_record.error_message = error_message
     if not any(
@@ -784,6 +797,8 @@ def query_campus_policy_func(query: str) -> str:
         )
         raise
     low_relevance = is_low_relevance(query, documents)
+    context_documents = select_context_docs(documents) if not low_relevance else []
+    context_text = format_rag_context(context_documents)
     _record_rag_trace(
         "query_campus_policy",
         query,
@@ -792,6 +807,8 @@ def query_campus_policy_func(query: str) -> str:
         rag_load_time_ms=rag_load_time_ms,
         is_low_relevance=low_relevance,
         no_answer_triggered=low_relevance,
+        context_documents=context_documents,
+        context_text=context_text,
     )
 
     if not documents:
@@ -800,9 +817,9 @@ def query_campus_policy_func(query: str) -> str:
     if low_relevance:
         return _policy_no_answer("当前检索结果与问题相关性不足，当前依据不足。")
 
-    basis_snippets = _extract_policy_snippets(documents, "条件")
-    process_snippets = _extract_policy_snippets(documents, "流程")
-    note_snippets = _extract_policy_snippets(documents, "注意")
+    basis_snippets = _extract_policy_snippets(context_documents, "条件")
+    process_snippets = _extract_policy_snippets(context_documents, "流程")
+    note_snippets = _extract_policy_snippets(context_documents, "注意")
 
     return (
         "## 简要结论\n"
@@ -815,7 +832,7 @@ def query_campus_policy_func(query: str) -> str:
         + "\n\n"
         "## 办理流程\n" + "\n".join(f"- {snippet}" for snippet in process_snippets) + "\n\n"
         "## 注意事项\n" + "\n".join(f"- {snippet}" for snippet in note_snippets) + "\n\n"
-        "## 来源文档\n" + _format_policy_sources(documents)
+        "## 来源文档\n" + _format_policy_sources(context_documents)
     )
 
 
@@ -850,6 +867,8 @@ def database_search_func(query: str) -> str:
         )
         raise
     low_relevance = is_low_relevance(query, documents)
+    context_documents = select_context_docs(documents) if not low_relevance else []
+    context_str = format_rag_context(context_documents)
     _record_rag_trace(
         "Database_Search",
         query,
@@ -858,6 +877,8 @@ def database_search_func(query: str) -> str:
         rag_load_time_ms=rag_load_time_ms,
         is_low_relevance=low_relevance,
         no_answer_triggered=low_relevance,
+        context_documents=context_documents,
+        context_text=context_str,
     )
 
     # Format the documents into a string
@@ -867,9 +888,7 @@ def database_search_func(query: str) -> str:
     if low_relevance:
         return _database_no_answer("当前检索结果与问题相关性不足，当前依据不足。")
 
-    context_str = format_contexts(documents)
-
-    return f"{context_str}\n\n### 来源\n{_format_policy_sources(documents)}"
+    return f"{context_str}\n\n### 来源\n{_format_policy_sources(context_documents)}"
 
 
 database_search: BaseTool = tool(database_search_func)

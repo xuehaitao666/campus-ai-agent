@@ -47,6 +47,10 @@ class TraceRecord:
     is_empty_result: bool | None = None
     is_low_relevance: bool | None = None
     no_answer_triggered: bool | None = None
+    context_docs_count: int | None = None
+    context_chars: int | None = None
+    estimated_context_tokens: int | None = None
+    dropped_context_docs_count: int | None = None
 
 
 class TraceSpan:
