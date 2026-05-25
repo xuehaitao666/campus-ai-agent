@@ -8,9 +8,12 @@ from pathlib import Path
 
 import numexpr
 from langchain_chroma import Chroma
+from langchain_core.documents import Document
 from langchain_core.tools import BaseTool, tool
 
+from core import settings
 from core.tracing import TraceRecord, TraceSpan, current_trace_record, write_trace_jsonl
+from rag.hybrid_retriever import BM25Index, build_bm25_index, hybrid_search
 
 CAMPUS_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "campus"
 COURSE_SCHEDULE_PATH = CAMPUS_DATA_DIR / "course_schedule.json"
@@ -509,6 +512,13 @@ def _record_rag_trace(
             "source": doc.metadata.get("source", "unknown"),
             "path": doc.metadata.get("path", ""),
             "chunk_id": doc.metadata.get("chunk_id", ""),
+            "section": doc.metadata.get("section", ""),
+            "heading_path": doc.metadata.get("heading_path", ""),
+            "policy_type": doc.metadata.get("policy_type", ""),
+            "retrieval_source": doc.metadata.get("retrieval_source", "vector"),
+            "hybrid_score": doc.metadata.get("hybrid_score"),
+            "vector_rank": doc.metadata.get("vector_rank"),
+            "bm25_rank": doc.metadata.get("bm25_rank"),
         }
         for doc in (documents or [])
     ]
@@ -576,7 +586,9 @@ def load_chroma_db():
             persist_directory=str(CAMPUS_POLICY_VECTOR_STORE_DIR),
             embedding_function=embeddings,
         )
-        retriever = chroma_db.as_retriever(search_kwargs={"k": 5})
+        retriever = chroma_db.as_retriever(
+            search_kwargs={"k": max(settings.RAG_TOP_K, settings.RAG_VECTOR_K)}
+        )
     except Exception as e:
         _record_rag_trace(
             "load_chroma_db",
@@ -599,10 +611,45 @@ def load_chroma_db():
     return retriever
 
 
+@lru_cache(maxsize=1)
+def load_bm25_documents() -> tuple[Document, ...]:
+    """Load indexed chunks from Chroma for the keyword retrieval channel."""
+    chroma_db = Chroma(persist_directory=str(CAMPUS_POLICY_VECTOR_STORE_DIR))
+    stored = chroma_db.get(include=["documents", "metadatas"])
+    contents = stored.get("documents") or []
+    metadatas = stored.get("metadatas") or [{} for _ in contents]
+    return tuple(
+        Document(page_content=content, metadata=metadata or {})
+        for content, metadata in zip(contents, metadatas, strict=False)
+        if content
+    )
+
+
+@lru_cache(maxsize=1)
+def load_bm25_index() -> BM25Index:
+    """Build the in-memory BM25 index once for the persisted policy chunks."""
+    return build_bm25_index(list(load_bm25_documents()))
+
+
 def clear_rag_cache() -> None:
     """Release cached campus-policy retrieval resources after index updates."""
+    load_bm25_index.cache_clear()
+    load_bm25_documents.cache_clear()
     load_chroma_db.cache_clear()
     create_campus_policy_embeddings.cache_clear()
+
+
+def _retrieve_policy_documents(query: str, retriever) -> list[Document]:
+    if settings.RAG_RETRIEVAL_MODE == "hybrid":
+        return hybrid_search(
+            query=query,
+            vector_retriever=retriever,
+            bm25_documents=load_bm25_index(),
+            top_k=settings.RAG_TOP_K,
+            vector_k=settings.RAG_VECTOR_K,
+            bm25_k=settings.RAG_BM25_K,
+        )
+    return list(retriever.invoke(query))[: settings.RAG_TOP_K]
 
 
 def _extract_policy_snippets(documents, keyword: str) -> list[str]:
@@ -720,7 +767,7 @@ def query_campus_policy_func(query: str) -> str:
         retriever = load_chroma_db()
         rag_load_time_ms = load_timer.stop()
         retrieval_timer = TraceSpan().start()
-        documents = retriever.invoke(query)
+        documents = _retrieve_policy_documents(query, retriever)
     except Exception as e:
         if load_timer.elapsed_ms is None:
             rag_load_time_ms = load_timer.stop()
@@ -786,7 +833,7 @@ def database_search_func(query: str) -> str:
 
         # Search the database for relevant documents
         retrieval_timer = TraceSpan().start()
-        documents = retriever.invoke(query)
+        documents = _retrieve_policy_documents(query, retriever)
     except Exception as e:
         if load_timer.elapsed_ms is None:
             rag_load_time_ms = load_timer.stop()

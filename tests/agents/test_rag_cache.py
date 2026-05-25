@@ -87,6 +87,48 @@ def test_clear_rag_cache_forces_resource_reinitialization(monkeypatch):
     assert fake_retriever.queries == ["首次查询", "知识库更新后的查询"]
 
 
+def test_hybrid_bm25_index_is_cached_and_reloaded_after_clear(monkeypatch):
+    documents = [
+        Document(
+            page_content="学生请假需要提交申请材料。",
+            metadata={"source": "leave_policy.md", "chunk_id": "leave-1"},
+        )
+    ]
+    retriever = FakeRetriever(documents)
+    calls = {"get": 0}
+
+    class FakeChroma:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def as_retriever(self, search_kwargs):
+            return retriever
+
+        def get(self, include):
+            calls["get"] += 1
+            assert include == ["documents", "metadatas"]
+            return {
+                "documents": [document.page_content for document in documents],
+                "metadatas": [document.metadata for document in documents],
+            }
+
+    @lru_cache(maxsize=1)
+    def fake_embeddings():
+        return object()
+
+    monkeypatch.setattr(campus_tools.settings, "RAG_RETRIEVAL_MODE", "hybrid")
+    monkeypatch.setattr(campus_tools, "create_campus_policy_embeddings", fake_embeddings)
+    monkeypatch.setattr(campus_tools, "Chroma", FakeChroma)
+
+    campus_tools.database_search_func("请假流程是什么？")
+    campus_tools.database_search_func("请假需要什么材料？")
+    assert calls["get"] == 1
+
+    campus_tools.clear_rag_cache()
+    campus_tools.database_search_func("请假流程是什么？")
+    assert calls["get"] == 2
+
+
 def test_database_search_trace_records_retrieval_metadata_and_empty_result(monkeypatch):
     retriever = FakeRetriever(
         [
@@ -133,6 +175,38 @@ def test_database_search_trace_records_retrieval_metadata_and_empty_result(monke
     assert empty_record.no_answer_triggered is True
     assert empty_record.source_list == []
     assert empty_record.chunk_id_list == []
+
+
+def test_database_search_trace_keeps_hybrid_ranking_metadata(monkeypatch):
+    documents = [
+        Document(
+            page_content="宿舍晚归按管理规定处理。",
+            metadata={
+                "source": "dormitory_policy.md",
+                "chunk_id": "dormitory-1",
+                "policy_type": "dormitory",
+                "section": "晚归管理",
+                "heading_path": "宿舍管理 > 晚归管理",
+                "retrieval_source": "vector+bm25",
+                "hybrid_score": 0.032,
+                "vector_rank": 2,
+                "bm25_rank": 1,
+            },
+        )
+    ]
+    monkeypatch.setattr(campus_tools, "load_chroma_db", lambda: FakeRetriever(documents))
+    records = []
+    monkeypatch.setattr(campus_tools, "write_trace_jsonl", records.append)
+
+    with bind_trace_record(TraceRecord(trace_id=generate_trace_id(), route="invoke")):
+        campus_tools.database_search_func("宿舍晚归如何处理？")
+
+    record = next(item for item in records if item.route == "Database_Search")
+    retrieved = record.retrieved_docs[0]
+    assert retrieved["retrieval_source"] == "vector+bm25"
+    assert retrieved["hybrid_score"] == 0.032
+    assert retrieved["policy_type"] == "dormitory"
+    assert retrieved["section"] == "晚归管理"
 
 
 def test_database_search_keeps_retriever_errors_visible_and_traced(monkeypatch):

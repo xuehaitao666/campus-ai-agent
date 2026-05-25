@@ -33,6 +33,30 @@ def test_settings_default_values():
     assert settings.PORT == 8080
     assert settings.USE_AWS_BEDROCK is False
     assert settings.USE_FAKE_MODEL is False
+    assert settings.RAG_RETRIEVAL_MODE == "vector"
+    assert settings.RAG_TOP_K == 5
+    assert settings.RAG_VECTOR_K == 5
+    assert settings.RAG_BM25_K == 8
+
+
+def test_settings_can_enable_hybrid_rag_retrieval():
+    with patch.dict(
+        os.environ,
+        {
+            "OPENAI_API_KEY": "test_key",
+            "RAG_RETRIEVAL_MODE": "hybrid",
+            "RAG_TOP_K": "3",
+            "RAG_VECTOR_K": "7",
+            "RAG_BM25_K": "9",
+        },
+        clear=True,
+    ):
+        settings = Settings(_env_file=None)
+
+    assert settings.RAG_RETRIEVAL_MODE == "hybrid"
+    assert settings.RAG_TOP_K == 3
+    assert settings.RAG_VECTOR_K == 7
+    assert settings.RAG_BM25_K == 9
 
 
 def test_settings_no_api_keys():

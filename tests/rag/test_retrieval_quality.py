@@ -4,6 +4,7 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
+from rag.hybrid_retriever import hybrid_search
 from scripts.build_campus_kb import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
@@ -79,6 +80,23 @@ def campus_policy_retriever(tmp_path):
     return vector_store.as_retriever(search_kwargs={"k": TOP_K})
 
 
+@pytest.fixture
+def hybrid_policy_retrieval_components(tmp_path):
+    vector_store = build_campus_knowledge_base(
+        knowledge_base_dir=Path("data/knowledge_base"),
+        vector_store_dir=tmp_path / "hybrid_vector_store" / "campus_policy",
+        embeddings=KeywordEmbeddings(),
+        chunk_size=DEFAULT_CHUNK_SIZE,
+        chunk_overlap=DEFAULT_CHUNK_OVERLAP,
+    )
+    stored = vector_store.get(include=["documents", "metadatas"])
+    documents = [
+        Document(page_content=content, metadata=metadata)
+        for content, metadata in zip(stored["documents"], stored["metadatas"], strict=False)
+    ]
+    return vector_store.as_retriever(search_kwargs={"k": 8}), documents
+
+
 @pytest.mark.parametrize(
     ("question", "expected_sources"),
     GOLDEN_QUESTIONS,
@@ -124,3 +142,30 @@ def test_golden_question_correct_doc_recall_baseline(campus_policy_retriever):
     # Production multilingual embedding quality needs a separately enabled evaluation run.
     assert recall == 1.0, f"correct_doc_recall={recall:.2%}, evaluations={evaluations}"
     assert all(item["correct_policy_type_recall"] for item in evaluations)
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_sources"),
+    GOLDEN_QUESTIONS[:4],
+    ids=["hybrid-leave", "hybrid-scholarship", "hybrid-dormitory", "hybrid-exam-cheating"],
+)
+def test_hybrid_golden_question_retrieves_expected_policy_source(
+    hybrid_policy_retrieval_components,
+    question,
+    expected_sources,
+):
+    retriever, bm25_documents = hybrid_policy_retrieval_components
+
+    documents = hybrid_search(
+        question,
+        retriever,
+        bm25_documents,
+        top_k=TOP_K,
+        vector_k=8,
+        bm25_k=8,
+    )
+
+    assert correct_doc_recall(expected_sources, retrieved_sources(documents))
+    assert correct_policy_type_recall(expected_sources, documents)
+    assert all(document.metadata["retrieval_source"] for document in documents)
+    assert all(document.metadata["hybrid_score"] > 0 for document in documents)

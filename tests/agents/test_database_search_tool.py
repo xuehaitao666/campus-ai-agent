@@ -93,6 +93,38 @@ def test_database_search_low_relevance_results_return_no_answer(monkeypatch):
     assert "大学英语" not in result
 
 
+def test_database_search_uses_hybrid_retrieval_when_enabled(monkeypatch):
+    documents = [
+        Document(
+            page_content="考试作弊将按照考试纪律相关规定处理。",
+            metadata={
+                "source": "exam_policy.md",
+                "chunk_id": "exam-policy-1",
+                "retrieval_source": "vector+bm25",
+                "hybrid_score": 0.03,
+            },
+        )
+    ]
+    fake_retriever = FakeRetriever([])
+    hybrid_calls = []
+    monkeypatch.setattr(campus_tools.settings, "RAG_RETRIEVAL_MODE", "hybrid")
+    monkeypatch.setattr(campus_tools, "load_chroma_db", lambda: fake_retriever)
+    monkeypatch.setattr(campus_tools, "load_bm25_index", lambda: "cached-index")
+
+    def fake_hybrid_search(**kwargs):
+        hybrid_calls.append(kwargs)
+        return documents
+
+    monkeypatch.setattr(campus_tools, "hybrid_search", fake_hybrid_search)
+
+    result = database_search_func("考试作弊有什么后果？")
+
+    assert hybrid_calls[0]["vector_retriever"] is fake_retriever
+    assert hybrid_calls[0]["bm25_documents"] == "cached-index"
+    assert "exam_policy.md" in result
+    assert "exam-policy-1" in result
+
+
 def test_database_search_propagates_retriever_errors(monkeypatch):
     monkeypatch.setattr(campus_tools, "load_chroma_db", lambda: FailingRetriever())
 

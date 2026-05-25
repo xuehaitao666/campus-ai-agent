@@ -1,6 +1,6 @@
 from enum import StrEnum
 from json import loads
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from dotenv import find_dotenv
 from pydantic import (
@@ -124,6 +124,12 @@ class Settings(BaseSettings):
         DatabaseType.SQLITE
     )  # Options: DatabaseType.SQLITE or DatabaseType.POSTGRES
     SQLITE_DB_PATH: str = "checkpoints.db"
+
+    # Campus policy RAG retrieval configuration
+    RAG_RETRIEVAL_MODE: Literal["vector", "hybrid"] = "vector"
+    RAG_TOP_K: int = 5
+    RAG_VECTOR_K: int = 5
+    RAG_BM25_K: int = 8
 
     # PostgreSQL Configuration
     POSTGRES_USER: str | None = None
