@@ -115,17 +115,22 @@ def test_database_search_trace_records_retrieval_metadata_and_empty_result(monke
     assert query_record.source_list == ["scholarship_policy.md"]
     assert query_record.chunk_id_list == ["scholarship-1"]
     assert query_record.is_empty_result is False
+    assert query_record.is_low_relevance is False
+    assert query_record.no_answer_triggered is False
     assert request_record.rag_load_time_ms is not None
     assert request_record.retrieved_docs[0]["source"] == "scholarship_policy.md"
 
     retriever.documents = []
     records.clear()
     with bind_trace_record(TraceRecord(trace_id=generate_trace_id(), route="invoke")):
-        assert campus_tools.database_search_func("无匹配内容") == ""
+        result = campus_tools.database_search_func("无匹配内容")
 
     empty_record = next(record for record in records if record.route == "Database_Search")
+    assert "当前知识库中没有找到明确依据" in result
     assert empty_record.returned_doc_count == 0
     assert empty_record.is_empty_result is True
+    assert empty_record.is_low_relevance is True
+    assert empty_record.no_answer_triggered is True
     assert empty_record.source_list == []
     assert empty_record.chunk_id_list == []
 

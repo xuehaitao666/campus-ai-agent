@@ -61,6 +61,8 @@ def test_rag_assistant_binds_database_search_and_constrains_knowledge_answers():
     assert "没有找到明确依据" in rag_module.instructions
     assert "不要编造学校规定" in rag_module.instructions
     assert "来源信息" in rag_module.instructions
+    assert "不得补充确定性制度结论" in rag_module.instructions
+    assert "必须保留来源及 chunk_id" in rag_module.instructions
 
 
 @pytest.mark.asyncio
@@ -78,7 +80,7 @@ async def test_rag_assistant_runs_model_database_search_model_cycle(monkeypatch)
     fake_retriever = FakeRetriever(documents)
     fake_model = DatabaseSearchFakeModel(
         "请假需要提交哪些材料？",
-        "根据请假制度，需要提交申请并上传证明材料。",
+        "根据请假制度，需要提交申请并上传证明材料。\n\n### 来源\n- leave_policy.md | leave_policy.md::chunk-0001",
     )
     monkeypatch.setattr(campus_tools, "load_chroma_db", lambda: fake_retriever)
     monkeypatch.setattr(rag_module, "Safeguard", SafeSafeguard)
@@ -101,12 +103,14 @@ async def test_rag_assistant_runs_model_database_search_model_cycle(monkeypatch)
     assert "学生请假应当提交申请" in tool_messages[0].content
     assert "Source: leave_policy.md" in tool_messages[0].content
     assert "Chunk: leave_policy.md::chunk-0001" in tool_messages[0].content
+    assert "### 来源" in tool_messages[0].content
     assert any(isinstance(message, ToolMessage) for message in fake_model.calls[1])
-    assert messages[-1].content == "根据请假制度，需要提交申请并上传证明材料。"
+    assert "根据请假制度，需要提交申请并上传证明材料。" in messages[-1].content
+    assert "leave_policy.md::chunk-0001" in messages[-1].content
 
 
 @pytest.mark.asyncio
-async def test_rag_assistant_empty_retrieval_passes_empty_tool_context_to_model(monkeypatch):
+async def test_rag_assistant_empty_retrieval_passes_no_answer_to_model(monkeypatch):
     fake_retriever = FakeRetriever([])
     fake_model = DatabaseSearchFakeModel(
         "未知校园制度是什么？",
@@ -121,11 +125,13 @@ async def test_rag_assistant_empty_retrieval_passes_empty_tool_context_to_model(
         config={"configurable": {}},
     )
 
-    tool_message = next(message for message in result["messages"] if isinstance(message, ToolMessage))
+    tool_message = next(
+        message for message in result["messages"] if isinstance(message, ToolMessage)
+    )
 
-    # Database_Search currently returns an empty context; no-answer wording is model-driven.
     assert fake_retriever.queries == ["未知校园制度是什么？"]
-    assert tool_message.content == ""
+    assert "当前知识库中没有找到明确依据" in tool_message.content
+    assert "建议以学校官方通知或辅导员答复为准" in tool_message.content
     assert result["messages"][-1].content == "当前知识库中没有找到明确依据。"
 
 

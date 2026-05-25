@@ -45,6 +45,8 @@ class TraceRecord:
     source_list: list[str] = field(default_factory=list)
     chunk_id_list: list[str] = field(default_factory=list)
     is_empty_result: bool | None = None
+    is_low_relevance: bool | None = None
+    no_answer_triggered: bool | None = None
 
 
 class TraceSpan:

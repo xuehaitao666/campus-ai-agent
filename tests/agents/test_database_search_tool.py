@@ -45,6 +45,8 @@ def test_database_search_returns_retrieved_context_with_metadata(monkeypatch):
     assert "Source: leave_policy.md" in result
     assert "Path: /kb/leave_policy.md" in result
     assert "Chunk: leave_policy.md::chunk-0001" in result
+    assert "### 来源" in result
+    assert "- leave_policy.md | leave_policy.md::chunk-0001 | /kb/leave_policy.md" in result
 
 
 def test_database_search_tool_invokes_search_without_real_vector_store(monkeypatch):
@@ -63,13 +65,32 @@ def test_database_search_tool_invokes_search_without_real_vector_store(monkeypat
     assert "Chunk: exam-policy-1" in result
 
 
-def test_database_search_empty_results_returns_empty_context(monkeypatch):
+def test_database_search_empty_results_returns_no_answer_without_fabricating_details(monkeypatch):
     monkeypatch.setattr(campus_tools, "load_chroma_db", lambda: FakeRetriever([]))
 
     result = database_search_func("知识库里不存在的问题")
 
-    # The low-level retrieval tool currently leaves no-answer wording to its caller.
-    assert result == ""
+    assert "当前知识库中没有找到明确依据" in result
+    assert "建议以学校官方通知或辅导员答复为准" in result
+    assert "不得编造具体制度、电话、办公室、网址" in result
+    assert "http://" not in result
+    assert "https://" not in result
+
+
+def test_database_search_low_relevance_results_return_no_answer(monkeypatch):
+    documents = [
+        Document(
+            page_content="大学英语选课办理流程，本课程强调听说读写训练。",
+            metadata={"source": "course_intro.md", "chunk_id": "english-1"},
+        )
+    ]
+    monkeypatch.setattr(campus_tools, "load_chroma_db", lambda: FakeRetriever(documents))
+
+    result = database_search_func("宿舍晚归办理流程是什么？")
+
+    assert "当前知识库中没有找到明确依据" in result
+    assert "当前检索结果与问题相关性不足" in result
+    assert "大学英语" not in result
 
 
 def test_database_search_propagates_retriever_errors(monkeypatch):

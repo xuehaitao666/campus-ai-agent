@@ -3,6 +3,7 @@ from langchain_core.documents import Document
 from agents import tools as campus_tools
 from agents.research_assistant import tools
 from agents.tools import query_campus_policy, query_campus_policy_func
+from core.tracing import TraceRecord, bind_trace_record, generate_trace_id
 
 
 class FakeRetriever:
@@ -35,7 +36,11 @@ def test_query_campus_policy_returns_fixed_sections_and_leave_source(monkeypatch
                 "## 注意事项\n"
                 "请假期间如涉及考试，应单独办理缓考或补考申请。"
             ),
-            metadata={"source": "leave_policy.md", "path": "/kb/leave_policy.md", "chunk_id": "leave-1"},
+            metadata={
+                "source": "leave_policy.md",
+                "path": "/kb/leave_policy.md",
+                "chunk_id": "leave-1",
+            },
         )
     ]
     fake_retriever = FakeRetriever(documents)
@@ -52,6 +57,7 @@ def test_query_campus_policy_returns_fixed_sections_and_leave_source(monkeypatch
     assert "### 制度明确规定" in result
     assert "### 建议性提醒" in result
     assert "leave_policy.md" in result
+    assert "leave-1" in result
     assert "请假系统" in result
     assert "不代表查询了真实学校系统" in result
 
@@ -82,9 +88,9 @@ def test_query_campus_policy_no_match_does_not_fabricate(monkeypatch):
 
     result = query_campus_policy_func("火星交换生宿舍制度是什么？")
 
-    assert "知识库中未找到明确依据" in result
+    assert "当前知识库中没有找到明确依据" in result
     assert "## 来源文档\n无" in result
-    assert "电话号码" in result
+    assert "不得编造具体制度、电话、办公室、网址" in result
 
 
 def test_query_campus_policy_low_relevance_returns_insufficient_basis(monkeypatch):
@@ -98,10 +104,33 @@ def test_query_campus_policy_low_relevance_returns_insufficient_basis(monkeypatc
 
     result = query_campus_policy_func("宿舍晚归会怎么处理？")
 
-    assert "知识库中未找到明确依据" in result
+    assert "当前知识库中没有找到明确依据" in result
     assert "当前依据不足" in result
     assert "大学英语" not in result
     assert "## 来源文档\n无" in result
+
+
+def test_query_campus_policy_low_relevance_is_recorded_as_no_answer(monkeypatch):
+    documents = [
+        Document(
+            page_content="大学英语课程介绍\n本课程强调听说读写训练。",
+            metadata={"source": "student_handbook.md", "chunk_id": "student-1"},
+        )
+    ]
+    records = []
+    monkeypatch.setattr(campus_tools, "load_chroma_db", lambda: FakeRetriever(documents))
+    monkeypatch.setattr(campus_tools, "write_trace_jsonl", records.append)
+
+    with bind_trace_record(TraceRecord(trace_id=generate_trace_id(), route="invoke")):
+        query_campus_policy_func("宿舍晚归会怎么处理？")
+
+    record = next(record for record in records if record.route == "query_campus_policy")
+    assert record.returned_doc_count == 1
+    assert record.source_list == ["student_handbook.md"]
+    assert record.chunk_id_list == ["student-1"]
+    assert record.is_empty_result is False
+    assert record.is_low_relevance is True
+    assert record.no_answer_triggered is True
 
 
 def test_query_campus_policy_does_not_fabricate_contacts_urls_or_windows(monkeypatch):

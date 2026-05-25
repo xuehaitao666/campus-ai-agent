@@ -495,6 +495,8 @@ def _record_rag_trace(
     documents,
     retrieval_time_ms: float,
     rag_load_time_ms: float | None = None,
+    is_low_relevance: bool | None = None,
+    no_answer_triggered: bool | None = None,
     error_message: str | None = None,
     update_request: bool = True,
 ) -> None:
@@ -531,6 +533,8 @@ def _record_rag_trace(
         source_list=source_list,
         chunk_id_list=chunk_id_list,
         is_empty_result=not retrieved_docs if documents is not None else None,
+        is_low_relevance=is_low_relevance,
+        no_answer_triggered=no_answer_triggered,
     )
     try:
         write_trace_jsonl(record)
@@ -547,6 +551,10 @@ def _record_rag_trace(
     request_record.tool_time_ms = (
         (request_record.tool_time_ms or 0) + retrieval_time_ms + (rag_load_time_ms or 0)
     )
+    if is_low_relevance is not None:
+        request_record.is_low_relevance = is_low_relevance
+    if no_answer_triggered is not None:
+        request_record.no_answer_triggered = no_answer_triggered
     if error_message and request_record.error_message is None:
         request_record.error_message = error_message
     if not any(
@@ -616,7 +624,10 @@ def _format_policy_sources(documents) -> str:
         chunk_id = doc.metadata.get("chunk_id", "")
         source_text = f"- {source}"
         if chunk_id:
-            source_text += f"（{chunk_id}）"
+            source_text += f" | {chunk_id}"
+        path = doc.metadata.get("path", "")
+        if path:
+            source_text += f" | {path}"
         if source_text not in sources:
             sources.append(source_text)
     return "\n".join(sources)
@@ -625,37 +636,69 @@ def _format_policy_sources(documents) -> str:
 def _policy_no_answer(reason: str) -> str:
     return (
         "## 简要结论\n"
-        "知识库中未找到明确依据。\n\n"
+        "当前知识库中没有找到明确依据。\n\n"
         "## 依据说明\n"
         f"{reason}\n\n"
         "## 办理流程\n"
-        "知识库中未找到明确依据。\n\n"
+        "当前知识库中没有找到明确依据。\n\n"
         "## 注意事项\n"
-        "建议以学校官方通知或辅导员答复为准。不要据此推断具体办理窗口、电话号码、网址或时间安排。\n\n"
+        "建议以学校官方通知或辅导员答复为准。"
+        "不得编造具体制度、电话、办公室、网址或其他知识库外信息。\n\n"
         "## 来源文档\n"
         "无"
     )
 
 
-def _has_relevant_policy_context(query: str, documents) -> bool:
+def _database_no_answer(reason: str) -> str:
+    return (
+        "### 检索结论\n"
+        "当前知识库中没有找到明确依据。\n\n"
+        "### 说明\n"
+        f"{reason}\n"
+        "建议以学校官方通知或辅导员答复为准。"
+        "不得编造具体制度、电话、办公室、网址或其他知识库外信息。\n\n"
+        "### 来源\n"
+        "- 无"
+    )
+
+
+def is_low_relevance(query: str, documents) -> bool:
+    """Apply a conservative rule check before exposing retrieved policy context."""
+    if not documents:
+        return True
+
+    non_empty_contents = [
+        doc.page_content.strip()
+        for doc in documents
+        if doc.page_content and doc.page_content.strip()
+    ]
+    if not non_empty_contents or max(len(content) for content in non_empty_contents) < 6:
+        return True
+
     corpus = " ".join(
         f"{doc.page_content} {doc.metadata.get('source', '')}" for doc in documents
     ).lower()
-    policy_keyword_groups = [
+    domain_keyword_groups = [
         {"请假", "病假", "事假", "假"},
         {"奖学金", "评奖", "挂科", "综测"},
         {"宿舍", "晚归", "大功率", "电器"},
         {"考试", "作弊", "缺考", "缓考", "旷考", "纪律"},
         {"学生手册", "手册"},
+    ]
+    generic_keyword_groups = [
         {"材料", "证明"},
         {"流程", "申请", "办理"},
     ]
     matched_groups = [
-        group for group in policy_keyword_groups if any(word in query for word in group)
+        group for group in domain_keyword_groups if any(word in query for word in group)
     ]
     if not matched_groups:
-        return bool(corpus.strip())
-    return any(any(word.lower() in corpus for word in group) for group in matched_groups)
+        matched_groups = [
+            group for group in generic_keyword_groups if any(word in query for word in group)
+        ]
+    if not matched_groups:
+        return False
+    return not any(any(word.lower() in corpus for word in group) for group in matched_groups)
 
 
 def query_campus_policy_func(query: str) -> str:
@@ -693,18 +736,21 @@ def query_campus_policy_func(query: str) -> str:
             error_message=str(e),
         )
         raise
+    low_relevance = is_low_relevance(query, documents)
     _record_rag_trace(
         "query_campus_policy",
         query,
         documents,
         retrieval_timer.stop(),
         rag_load_time_ms=rag_load_time_ms,
+        is_low_relevance=low_relevance,
+        no_answer_triggered=low_relevance,
     )
 
     if not documents:
         return _policy_no_answer("未检索到与该问题直接相关的校园制度文档片段。")
 
-    if not _has_relevant_policy_context(query, documents):
+    if low_relevance:
         return _policy_no_answer("当前检索结果与问题相关性不足，当前依据不足。")
 
     basis_snippets = _extract_policy_snippets(documents, "条件")
@@ -756,18 +802,27 @@ def database_search_func(query: str) -> str:
             error_message=str(e),
         )
         raise
+    low_relevance = is_low_relevance(query, documents)
     _record_rag_trace(
         "Database_Search",
         query,
         documents,
         retrieval_timer.stop(),
         rag_load_time_ms=rag_load_time_ms,
+        is_low_relevance=low_relevance,
+        no_answer_triggered=low_relevance,
     )
 
     # Format the documents into a string
+    if not documents:
+        return _database_no_answer("未检索到与该问题直接相关的校园制度文档片段。")
+
+    if low_relevance:
+        return _database_no_answer("当前检索结果与问题相关性不足，当前依据不足。")
+
     context_str = format_contexts(documents)
 
-    return context_str
+    return f"{context_str}\n\n### 来源\n{_format_policy_sources(documents)}"
 
 
 database_search: BaseTool = tool(database_search_func)
