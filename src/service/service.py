@@ -23,7 +23,9 @@ from langsmith import Client as LangsmithClient
 from langsmith import uuid7
 
 from agents import DEFAULT_AGENT, AgentGraph, get_agent, get_all_agent_info, load_agent
+from agents.tools import get_course_schedule_func
 from core import settings
+from core.router import RouteIntent, parse_course_query, route_query
 from core.tracing import (
     TraceRecord,
     TraceSpan,
@@ -159,6 +161,41 @@ def _write_trace_safely(record: TraceRecord) -> None:
         logger.warning(f"Unable to write trace record: {e}")
 
 
+def _maybe_handle_course_fast_path(
+    user_input: UserInput,
+    trace_record: TraceRecord,
+) -> ChatMessage | None:
+    decision = route_query(user_input.message)
+    if decision.intent != RouteIntent.COURSE:
+        return None
+
+    parameters = parse_course_query(user_input.message)
+    if not any(parameters.values()):
+        return None
+    if (
+        any(relative_day in user_input.message for relative_day in ("今天", "明天"))
+        and not parameters["day"]
+    ):
+        return None
+
+    run_id = uuid7()
+    trace_record.run_id = str(run_id)
+    trace_record.thread_id = user_input.thread_id or str(uuid4())
+    trace_record.user_id = user_input.user_id or str(uuid4())
+    trace_record.route = "course_schedule_fast_path"
+    trace_record.tool_calls = [{"name": "get_course_schedule", "args": parameters}]
+    trace_record.llm_time_ms = 0
+    trace_record.prompt_tokens = 0
+    trace_record.completion_tokens = 0
+    trace_record.total_tokens = 0
+
+    with TraceSpan() as tool_timer:
+        content = get_course_schedule_func(**parameters)
+    trace_record.tool_time_ms = tool_timer.elapsed_ms
+
+    return ChatMessage(type="ai", content=content, run_id=str(run_id))
+
+
 async def _handle_input(
     user_input: UserInput,
     agent: AgentGraph,
@@ -241,6 +278,8 @@ async def invoke(user_input: UserInput, agent_id: str = DEFAULT_AGENT) -> ChatMe
     trace_record = _new_request_trace(user_input, agent_id, "invoke")
     timer = TraceSpan().start()
     try:
+        if output := _maybe_handle_course_fast_path(user_input, trace_record):
+            return output
         agent: AgentGraph = get_agent(agent_id)
         kwargs, run_id = await _handle_input(user_input, agent, trace_record.trace_id)
         _update_trace_request_ids(trace_record, kwargs, run_id)
@@ -286,6 +325,9 @@ async def message_generator(
     trace_record = _new_request_trace(user_input, agent_id, "stream")
     timer = TraceSpan().start()
     try:
+        if output := _maybe_handle_course_fast_path(user_input, trace_record):
+            yield f"data: {json.dumps({'type': 'message', 'content': output.model_dump()})}\n\n"
+            return
         agent: AgentGraph = get_agent(agent_id)
         kwargs, run_id = await _handle_input(user_input, agent, trace_record.trace_id)
         _update_trace_request_ids(trace_record, kwargs, run_id)

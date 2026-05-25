@@ -32,6 +32,11 @@ COURSE_KEYWORDS = (
     "周三",
     "周四",
     "周五",
+    "星期一",
+    "星期二",
+    "星期三",
+    "星期四",
+    "星期五",
     "今天",
     "明天",
     "上午",
@@ -82,6 +87,20 @@ POLICY_KEYWORDS = (
     "违纪",
 )
 GENERAL_KEYWORDS = ("你好", "你是谁", "你能做什么", "介绍一下")
+COURSE_DAY_ALIASES = (
+    ("星期一", "周一"),
+    ("周一", "周一"),
+    ("星期二", "周二"),
+    ("周二", "周二"),
+    ("星期三", "周三"),
+    ("周三", "周三"),
+    ("星期四", "周四"),
+    ("周四", "周四"),
+    ("星期五", "周五"),
+    ("周五", "周五"),
+)
+COURSE_TIME_PERIODS = ("上午", "下午", "晚上")
+COURSE_NAMES = ("数据结构", "操作系统")
 
 
 def _matches(query: str, keywords: tuple[str, ...]) -> list[str]:
@@ -102,6 +121,28 @@ def _decision(
         matched_keywords=keywords,
         reason=reason,
     )
+
+
+def parse_course_query(query: str) -> dict[str, str | None]:
+    """Extract supported course schedule filters for a rule-based fast path."""
+    normalized_query = query.strip().lower()
+    day = next(
+        (canonical for alias, canonical in COURSE_DAY_ALIASES if alias in normalized_query),
+        None,
+    )
+    time_period = next(
+        (period for period in COURSE_TIME_PERIODS if period in normalized_query),
+        None,
+    )
+    course_name = next(
+        (course for course in COURSE_NAMES if course in normalized_query),
+        None,
+    )
+    return {
+        "day": day,
+        "time_period": time_period,
+        "course_name": course_name,
+    }
 
 
 def route_query(query: str) -> RouteDecision:
