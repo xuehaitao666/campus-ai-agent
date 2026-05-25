@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import re
 from datetime import date, datetime, timedelta
@@ -8,6 +9,7 @@ import numexpr
 from langchain_chroma import Chroma
 from langchain_core.tools import BaseTool, tool
 
+from core.tracing import TraceRecord, TraceSpan, current_trace_record, write_trace_jsonl
 
 CAMPUS_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "campus"
 COURSE_SCHEDULE_PATH = CAMPUS_DATA_DIR / "course_schedule.json"
@@ -17,6 +19,7 @@ CAMPUS_POLICY_VECTOR_STORE_DIR = (
     Path(__file__).resolve().parents[2] / "data" / "vector_store" / "campus_policy"
 )
 CAMPUS_POLICY_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+logger = logging.getLogger(__name__)
 
 
 def calculator_func(expression: str) -> str:
@@ -317,7 +320,9 @@ def _load_student_profile() -> dict:
 
 def _split_focus_topics(focus_topics: str | None, profile: dict) -> list[str]:
     if focus_topics:
-        topics = [item.strip() for item in re.split(r"[,，、/]\s*|\s+", focus_topics) if item.strip()]
+        topics = [
+            item.strip() for item in re.split(r"[,，、/]\s*|\s+", focus_topics) if item.strip()
+        ]
         if topics:
             return topics
 
@@ -346,7 +351,9 @@ def _preferred_time_for_day(day_date: date, profile: dict, available_time: str |
             base_time = "晚上 19:30-22:00"
 
     day_name = day_date.strftime("%A")
-    courses = [course for course in _load_course_schedule() if course.get("day_of_week") == day_name]
+    courses = [
+        course for course in _load_course_schedule() if course.get("day_of_week") == day_name
+    ]
     if not courses:
         return base_time
 
@@ -426,7 +433,11 @@ def generate_study_plan_func(
     weekly_available_hours = profile.get("weekly_available_hours", "未提供")
     learning_style = profile.get("learning_style", "未提供")
     constraints = profile.get("constraints", [])
-    constraints_text = "；".join(str(item) for item in constraints) if isinstance(constraints, list) else str(constraints)
+    constraints_text = (
+        "；".join(str(item) for item in constraints)
+        if isinstance(constraints, list)
+        else str(constraints)
+    )
 
     plan = {
         "plan_title": plan_title,
@@ -476,16 +487,95 @@ def create_campus_policy_embeddings():
     )
 
 
-def load_chroma_db():
-    # Create the embedding function for our project description database
-    embeddings = create_campus_policy_embeddings()
+def _record_rag_trace(
+    route: str,
+    query: str | None,
+    documents,
+    elapsed_ms: float,
+    error_message: str | None = None,
+    update_request: bool = True,
+) -> None:
+    request_record = current_trace_record()
+    if request_record is None:
+        return
 
-    # Load the stored campus policy vector database
-    chroma_db = Chroma(
-        persist_directory=str(CAMPUS_POLICY_VECTOR_STORE_DIR),
-        embedding_function=embeddings,
+    retrieved_docs = [
+        {
+            "source": doc.metadata.get("source", "unknown"),
+            "path": doc.metadata.get("path", ""),
+            "chunk_id": doc.metadata.get("chunk_id", ""),
+        }
+        for doc in (documents or [])
+    ]
+    source_list = [str(doc["source"]) for doc in retrieved_docs]
+    chunk_id_list = [str(doc["chunk_id"]) for doc in retrieved_docs if doc["chunk_id"]]
+    record = TraceRecord(
+        trace_id=request_record.trace_id,
+        run_id=request_record.run_id,
+        thread_id=request_record.thread_id,
+        user_id=request_record.user_id,
+        agent_id=request_record.agent_id,
+        model_name=request_record.model_name,
+        query=query,
+        route=route,
+        tool_calls=[{"name": route, "args": {"query": query} if query else {}}],
+        retrieved_docs=retrieved_docs,
+        retrieval_time_ms=elapsed_ms,
+        error_message=error_message,
+        event_type="rag_retrieval",
+        returned_doc_count=len(retrieved_docs) if documents is not None else None,
+        source_list=source_list,
+        chunk_id_list=chunk_id_list,
+        is_empty_result=not retrieved_docs if documents is not None else None,
     )
-    retriever = chroma_db.as_retriever(search_kwargs={"k": 5})
+    try:
+        write_trace_jsonl(record)
+    except Exception as e:
+        logger.warning(f"Unable to write RAG trace record: {e}")
+
+    if not update_request:
+        return
+    request_record.retrieved_docs.extend(retrieved_docs)
+    request_record.retrieval_time_ms = (request_record.retrieval_time_ms or 0) + elapsed_ms
+    request_record.tool_time_ms = (request_record.tool_time_ms or 0) + elapsed_ms
+    if error_message and request_record.error_message is None:
+        request_record.error_message = error_message
+    if not any(
+        call.get("name") == route and call.get("args", {}).get("query") == query
+        for call in request_record.tool_calls
+    ):
+        request_record.tool_calls.append({"name": route, "args": {"query": query} if query else {}})
+
+
+def load_chroma_db():
+    timer = TraceSpan().start()
+    try:
+        # Create the embedding function for our project description database
+        embeddings = create_campus_policy_embeddings()
+
+        # Load the stored campus policy vector database
+        chroma_db = Chroma(
+            persist_directory=str(CAMPUS_POLICY_VECTOR_STORE_DIR),
+            embedding_function=embeddings,
+        )
+        retriever = chroma_db.as_retriever(search_kwargs={"k": 5})
+    except Exception as e:
+        _record_rag_trace(
+            "load_chroma_db",
+            None,
+            None,
+            timer.stop(),
+            error_message=str(e),
+            update_request=False,
+        )
+        raise
+    _record_rag_trace(
+        "load_chroma_db",
+        None,
+        None,
+        timer.stop(),
+        update_request=False,
+    )
     return retriever
 
 
@@ -542,7 +632,9 @@ def _has_relevant_policy_context(query: str, documents) -> bool:
         {"材料", "证明"},
         {"流程", "申请", "办理"},
     ]
-    matched_groups = [group for group in policy_keyword_groups if any(word in query for word in group)]
+    matched_groups = [
+        group for group in policy_keyword_groups if any(word in query for word in group)
+    ]
     if not matched_groups:
         return bool(corpus.strip())
     return any(any(word.lower() in corpus for word in group) for group in matched_groups)
@@ -562,8 +654,14 @@ def query_campus_policy_func(query: str) -> str:
             "挂科后还能评奖学金吗？", or "考试作弊有什么后果？".
     """
 
-    retriever = load_chroma_db()
-    documents = retriever.invoke(query)
+    timer = TraceSpan().start()
+    try:
+        retriever = load_chroma_db()
+        documents = retriever.invoke(query)
+    except Exception as e:
+        _record_rag_trace("query_campus_policy", query, [], timer.stop(), error_message=str(e))
+        raise
+    _record_rag_trace("query_campus_policy", query, documents, timer.stop())
 
     if not documents:
         return _policy_no_answer("未检索到与该问题直接相关的校园制度文档片段。")
@@ -579,21 +677,14 @@ def query_campus_policy_func(query: str) -> str:
         "## 简要结论\n"
         "已基于校园制度知识库检索结果整理如下。涉及未在检索片段中明确出现的细节，当前知识库未提供明确说明。\n\n"
         "## 依据说明\n"
-        "### 制度明确规定\n"
-        + "\n".join(f"- {snippet}" for snippet in basis_snippets)
-        + "\n\n"
+        "### 制度明确规定\n" + "\n".join(f"- {snippet}" for snippet in basis_snippets) + "\n\n"
         "### 建议性提醒\n"
         "- 以下回答仅依据本地校园制度知识库检索片段，不代表查询了真实学校系统。\n"
         "- 未在来源文档中明确出现的办理窗口、电话号码、网址或具体时间，当前知识库未提供明确说明。"
         + "\n\n"
-        "## 办理流程\n"
-        + "\n".join(f"- {snippet}" for snippet in process_snippets)
-        + "\n\n"
-        "## 注意事项\n"
-        + "\n".join(f"- {snippet}" for snippet in note_snippets)
-        + "\n\n"
-        "## 来源文档\n"
-        + _format_policy_sources(documents)
+        "## 办理流程\n" + "\n".join(f"- {snippet}" for snippet in process_snippets) + "\n\n"
+        "## 注意事项\n" + "\n".join(f"- {snippet}" for snippet in note_snippets) + "\n\n"
+        "## 来源文档\n" + _format_policy_sources(documents)
     )
 
 
@@ -603,11 +694,17 @@ query_campus_policy.name = "query_campus_policy"
 
 def database_search_func(query: str) -> str:
     """Searches the campus policy knowledge base for student handbook information."""
-    # Get the chroma retriever
-    retriever = load_chroma_db()
+    timer = TraceSpan().start()
+    try:
+        # Get the chroma retriever
+        retriever = load_chroma_db()
 
-    # Search the database for relevant documents
-    documents = retriever.invoke(query)
+        # Search the database for relevant documents
+        documents = retriever.invoke(query)
+    except Exception as e:
+        _record_rag_trace("Database_Search", query, [], timer.stop(), error_message=str(e))
+        raise
+    _record_rag_trace("Database_Search", query, documents, timer.stop())
 
     # Format the documents into a string
     context_str = format_contexts(documents)

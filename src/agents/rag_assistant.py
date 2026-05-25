@@ -16,6 +16,7 @@ from agents.campus_prompt import CAMPUS_AI_AGENT_SYSTEM_PROMPT
 from agents.safeguard import Safeguard, SafeguardOutput, SafetyAssessment
 from agents.tools import database_search
 from core import get_model, settings
+from core.tracing import TraceSpan, add_token_usage, current_trace_record
 
 
 class AgentState(MessagesState, total=False):
@@ -68,7 +69,21 @@ def format_safety_message(safety: SafeguardOutput) -> AIMessage:
 async def acall_model(state: AgentState, config: RunnableConfig) -> AgentState:
     m = get_model(config["configurable"].get("model", settings.DEFAULT_MODEL))
     model_runnable = wrap_model(m)
-    response = await model_runnable.ainvoke(state, config)
+    timer = TraceSpan().start()
+    try:
+        response = await model_runnable.ainvoke(state, config)
+    finally:
+        record = current_trace_record()
+        if record is not None:
+            elapsed_ms = timer.stop()
+            record.llm_time_ms = (record.llm_time_ms or 0) + elapsed_ms
+
+    record = current_trace_record()
+    if record is not None:
+        add_token_usage(record, response)
+        record.tool_calls.extend(
+            {"name": call["name"], "args": call.get("args", {})} for call in response.tool_calls
+        )
 
     if state["remaining_steps"] < 2 and response.tool_calls:
         return {
