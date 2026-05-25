@@ -101,6 +101,14 @@ COURSE_DAY_ALIASES = (
 )
 COURSE_TIME_PERIODS = ("上午", "下午", "晚上")
 COURSE_NAMES = ("数据结构", "操作系统")
+EVENT_DATE_RANGES = ("这周", "本周", "最近", "今天", "明天")
+EVENT_TYPE_ALIASES = (
+    ("招聘会", "招聘"),
+    ("讲座", "讲座"),
+    ("比赛", "比赛"),
+    ("竞赛", "比赛"),
+    ("社团", "社团"),
+)
 
 
 def _matches(query: str, keywords: tuple[str, ...]) -> list[str]:
@@ -142,6 +150,36 @@ def parse_course_query(query: str) -> dict[str, str | None]:
         "day": day,
         "time_period": time_period,
         "course_name": course_name,
+    }
+
+
+def parse_event_query(query: str) -> dict[str, str | None]:
+    """Extract event filters supported by the local campus events tool."""
+    normalized_query = query.strip().lower()
+    date_range = next(
+        (date_range for date_range in EVENT_DATE_RANGES if date_range in normalized_query),
+        None,
+    )
+    event_type = next(
+        (canonical for alias, canonical in EVENT_TYPE_ALIASES if alias in normalized_query),
+        None,
+    )
+
+    keyword = None
+    if "ai" in normalized_query or "人工智能" in normalized_query:
+        keyword = "AI"
+    elif "软件工程" in normalized_query:
+        keyword = "软件工程"
+    elif "宣讲会" in normalized_query:
+        keyword = "宣讲"
+    elif "报名" in normalized_query:
+        keyword = "报名"
+
+    return {
+        "keyword": keyword,
+        "date_range": date_range,
+        "event_type": event_type,
+        "target_audience": None,
     }
 
 
