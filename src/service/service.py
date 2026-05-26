@@ -557,13 +557,25 @@ async def history(input: ChatHistoryInput) -> ChatHistory:
     """
     Get chat history.
     """
-    # TODO: Hard-coding DEFAULT_AGENT here is wonky
-    agent: AgentGraph = get_agent(DEFAULT_AGENT)
+    agent_id = input.agent_id or DEFAULT_AGENT
+    try:
+        agent: AgentGraph = get_agent(agent_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+
     try:
         state_snapshot = await agent.aget_state(
             config=RunnableConfig(configurable={"thread_id": input.thread_id})
         )
         messages: list[AnyMessage] = state_snapshot.values["messages"]
+        if not input.include_tools:
+            messages = [
+                message
+                for message in messages
+                if not isinstance(message, ToolMessage)
+                and not (isinstance(message, AIMessage) and message.tool_calls)
+            ]
+        messages = messages[-input.limit :]
         chat_messages: list[ChatMessage] = [langchain_to_chat_message(m) for m in messages]
         return ChatHistory(messages=chat_messages)
     except Exception as e:

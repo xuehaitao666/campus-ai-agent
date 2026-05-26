@@ -20,6 +20,7 @@ from agents.tools import (
     query_campus_policy,
 )
 from core import get_model, settings
+from core.history import trim_messages_for_model
 from core.model_fallback import ainvoke_with_model_fallback
 from core.tracing import TraceSpan, add_token_usage, current_trace_record
 
@@ -112,9 +113,21 @@ def format_safety_message(safety: SafeguardOutput) -> AIMessage:
 
 
 async def acall_model(state: AgentState, config: RunnableConfig) -> AgentState:
+    trimmed_messages, trimmed_message_count = trim_messages_for_model(
+        state["messages"], settings.HISTORY_MAX_MESSAGES
+    )
+    model_state = {**state, "messages": trimmed_messages}
+    record = current_trace_record()
+    if record is not None:
+        record.history_message_count = max(
+            record.history_message_count or 0, len(state["messages"])
+        )
+        record.trimmed_message_count = max(record.trimmed_message_count or 0, trimmed_message_count)
+        record.history_max_messages = settings.HISTORY_MAX_MESSAGES
+
     timer = TraceSpan().start()
     try:
-        response = await ainvoke_with_model_fallback(state, config, wrap_model, get_model)
+        response = await ainvoke_with_model_fallback(model_state, config, wrap_model, get_model)
     finally:
         record = current_trace_record()
         if record is not None:

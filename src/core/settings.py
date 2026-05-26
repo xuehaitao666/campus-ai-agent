@@ -136,6 +136,9 @@ class Settings(BaseSettings):
     RAG_VECTOR_K: int = 5
     RAG_BM25_K: int = 8
 
+    # Multi-turn model context configuration
+    HISTORY_MAX_MESSAGES: int = Field(default=20, ge=1, le=200)
+
     # PostgreSQL Configuration
     POSTGRES_USER: str | None = None
     POSTGRES_PASSWORD: SecretStr | None = None

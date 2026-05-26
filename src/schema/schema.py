@@ -169,6 +169,21 @@ class ChatHistoryInput(BaseModel):
         description="Thread ID to persist and continue a multi-turn conversation.",
         examples=["847c6285-8fc9-4560-a83f-4e6285809254"],
     )
+    agent_id: str | None = Field(
+        description="Agent whose checkpointed history should be read. Defaults to the service default agent.",
+        default=None,
+        examples=["research-assistant"],
+    )
+    limit: int = Field(
+        description="Maximum number of recent visible messages to return.",
+        default=50,
+        ge=1,
+        le=200,
+    )
+    include_tools: bool = Field(
+        description="Whether to include tool-call and tool-result intermediate messages.",
+        default=True,
+    )
 
 
 class ChatHistory(BaseModel):

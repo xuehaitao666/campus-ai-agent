@@ -56,6 +56,9 @@ class TraceRecord:
     context_chars: int | None = None
     estimated_context_tokens: int | None = None
     dropped_context_docs_count: int | None = None
+    history_message_count: int | None = None
+    trimmed_message_count: int | None = None
+    history_max_messages: int | None = None
 
 
 class TraceSpan:

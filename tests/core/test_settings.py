@@ -37,6 +37,7 @@ def test_settings_default_values():
     assert settings.RAG_TOP_K == 5
     assert settings.RAG_VECTOR_K == 5
     assert settings.RAG_BM25_K == 8
+    assert settings.HISTORY_MAX_MESSAGES == 20
 
 
 def test_settings_can_enable_hybrid_rag_retrieval():
@@ -57,6 +58,17 @@ def test_settings_can_enable_hybrid_rag_retrieval():
     assert settings.RAG_TOP_K == 3
     assert settings.RAG_VECTOR_K == 7
     assert settings.RAG_BM25_K == 9
+
+
+def test_settings_reads_history_max_messages():
+    with patch.dict(
+        os.environ,
+        {"OPENAI_API_KEY": "test_key", "HISTORY_MAX_MESSAGES": "12"},
+        clear=True,
+    ):
+        settings = Settings(_env_file=None)
+
+    assert settings.HISTORY_MAX_MESSAGES == 12
 
 
 def test_settings_no_api_keys():
