@@ -20,6 +20,7 @@ from agents.tools import (
     query_campus_policy,
 )
 from core import get_model, settings
+from core.model_fallback import ainvoke_with_model_fallback
 from core.tracing import TraceSpan, add_token_usage, current_trace_record
 
 
@@ -111,11 +112,9 @@ def format_safety_message(safety: SafeguardOutput) -> AIMessage:
 
 
 async def acall_model(state: AgentState, config: RunnableConfig) -> AgentState:
-    m = get_model(config["configurable"].get("model", settings.DEFAULT_MODEL))
-    model_runnable = wrap_model(m)
     timer = TraceSpan().start()
     try:
-        response = await model_runnable.ainvoke(state, config)
+        response = await ainvoke_with_model_fallback(state, config, wrap_model, get_model)
     finally:
         record = current_trace_record()
         if record is not None:

@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 from agents import tools
 from agents.tools import generate_study_plan, generate_study_plan_func
@@ -6,6 +7,15 @@ from agents.tools import generate_study_plan, generate_study_plan_func
 
 def _load_plan(result: str) -> dict:
     return json.loads(result)
+
+
+def _freeze_today_to_course_fixture(monkeypatch):
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 5, 25)
+
+    monkeypatch.setattr(tools, "date", FixedDate)
 
 
 def test_generate_study_plan_default_7_days():
@@ -51,12 +61,16 @@ def test_generate_study_plan_with_focus_topics():
     assert "RAG" in topics[2]
 
 
-def test_generate_study_plan_avoids_course_time():
-    plan = _load_plan(generate_study_plan_func(days=4))
-    available_times = [item["available_time"] for item in plan["daily_plan"]]
+def test_generate_study_plan_avoids_course_time(monkeypatch):
+    _freeze_today_to_course_fixture(monkeypatch)
 
-    assert any("避开上课时间" in item for item in available_times)
-    assert any("数据结构与算法" in item or "概率论与数理统计" in item for item in available_times)
+    plan = _load_plan(generate_study_plan_func(days=4))
+    monday_plan = plan["daily_plan"][0]
+
+    assert "Monday" in monday_plan["day"]
+    assert "避开上课时间" in monday_plan["available_time"]
+    assert "08:30-10:05" in monday_plan["available_time"]
+    assert "14:00-15:35" in monday_plan["available_time"]
 
 
 def test_generate_study_plan_tolerates_missing_profile_fields(tmp_path, monkeypatch):

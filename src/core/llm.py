@@ -73,17 +73,25 @@ def get_model(model_name: AllModelEnum, /) -> ModelT:
         raise ValueError(f"Unsupported model: {model_name}")
 
     if model_name in OpenAIModelName:
-        return ChatOpenAI(model=api_model_name, streaming=True)
+        return ChatOpenAI(
+            model=api_model_name,
+            temperature=settings.MODEL_TEMPERATURE,
+            streaming=True,
+            timeout=settings.MODEL_TIMEOUT_SECONDS,
+            max_retries=settings.MODEL_MAX_RETRIES,
+        )
     if model_name in OpenAICompatibleName:
         if not settings.COMPATIBLE_BASE_URL or not settings.COMPATIBLE_MODEL:
             raise ValueError("OpenAICompatible base url and endpoint must be configured")
 
         return ChatOpenAI(
             model=settings.COMPATIBLE_MODEL,
-            temperature=0.5,
+            temperature=settings.MODEL_TEMPERATURE,
             streaming=True,
             openai_api_base=settings.COMPATIBLE_BASE_URL,
             openai_api_key=settings.COMPATIBLE_API_KEY,
+            timeout=settings.MODEL_TIMEOUT_SECONDS,
+            max_retries=settings.MODEL_MAX_RETRIES,
         )
     if model_name in AzureOpenAIModelName:
         if not settings.AZURE_OPENAI_API_KEY or not settings.AZURE_OPENAI_ENDPOINT:
@@ -93,46 +101,81 @@ def get_model(model_name: AllModelEnum, /) -> ModelT:
             azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
             deployment_name=api_model_name,
             api_version=settings.AZURE_OPENAI_API_VERSION,
-            temperature=0.5,
+            temperature=settings.MODEL_TEMPERATURE,
             streaming=True,
-            timeout=60,
-            max_retries=3,
+            timeout=settings.MODEL_TIMEOUT_SECONDS,
+            max_retries=settings.MODEL_MAX_RETRIES,
         )
     if model_name in DeepseekModelName:
         return ChatOpenAI(
             model=api_model_name,
-            temperature=0.5,
+            temperature=settings.MODEL_TEMPERATURE,
             streaming=True,
             openai_api_base="https://api.deepseek.com",
             openai_api_key=settings.DEEPSEEK_API_KEY,
+            timeout=settings.MODEL_TIMEOUT_SECONDS,
+            max_retries=settings.MODEL_MAX_RETRIES,
         )
     if model_name in AnthropicModelName:
-        return ChatAnthropic(model=api_model_name, temperature=0.5, streaming=True)
+        return ChatAnthropic(
+            model=api_model_name,
+            temperature=settings.MODEL_TEMPERATURE,
+            streaming=True,
+            timeout=settings.MODEL_TIMEOUT_SECONDS,
+            max_retries=settings.MODEL_MAX_RETRIES,
+        )
     if model_name in GoogleModelName:
-        return ChatGoogleGenerativeAI(model=api_model_name, temperature=0.5, streaming=True)
+        return ChatGoogleGenerativeAI(
+            model=api_model_name,
+            temperature=settings.MODEL_TEMPERATURE,
+            streaming=True,
+            request_timeout=settings.MODEL_TIMEOUT_SECONDS,
+            retries=settings.MODEL_MAX_RETRIES,
+        )
     if model_name in VertexAIModelName:
-        return ChatVertexAI(model=api_model_name, temperature=0.5, streaming=True)
+        return ChatVertexAI(
+            model=api_model_name,
+            temperature=settings.MODEL_TEMPERATURE,
+            streaming=True,
+            max_retries=settings.MODEL_MAX_RETRIES,
+        )
     if model_name in GroqModelName:
         if model_name == GroqModelName.GPT_OSS_SAFEGUARD_20B:
-            return ChatGroq(model=api_model_name, temperature=0.0)  # type: ignore[call-arg]
-        return ChatGroq(model=api_model_name, temperature=0.5)  # type: ignore[call-arg]
+            return ChatGroq(
+                model=api_model_name,
+                temperature=0.0,
+                timeout=settings.MODEL_TIMEOUT_SECONDS,
+                max_retries=settings.MODEL_MAX_RETRIES,
+            )  # type: ignore[call-arg]
+        return ChatGroq(
+            model=api_model_name,
+            temperature=settings.MODEL_TEMPERATURE,
+            timeout=settings.MODEL_TIMEOUT_SECONDS,
+            max_retries=settings.MODEL_MAX_RETRIES,
+        )  # type: ignore[call-arg]
     if model_name in AWSModelName:
-        return ChatBedrock(model_id=api_model_name, temperature=0.5)
+        return ChatBedrock(model_id=api_model_name, temperature=settings.MODEL_TEMPERATURE)
     if model_name in OllamaModelName:
         if settings.OLLAMA_BASE_URL:
             chat_ollama = ChatOllama(
-                model=settings.OLLAMA_MODEL, temperature=0.5, base_url=settings.OLLAMA_BASE_URL
+                model=settings.OLLAMA_MODEL,
+                temperature=settings.MODEL_TEMPERATURE,
+                base_url=settings.OLLAMA_BASE_URL,
             )
         else:
-            chat_ollama = ChatOllama(model=settings.OLLAMA_MODEL, temperature=0.5)
+            chat_ollama = ChatOllama(
+                model=settings.OLLAMA_MODEL, temperature=settings.MODEL_TEMPERATURE
+            )
         return chat_ollama
     if model_name in OpenRouterModelName:
         return ChatOpenAI(
             model=api_model_name,
-            temperature=0.5,
+            temperature=settings.MODEL_TEMPERATURE,
             streaming=True,
             base_url="https://openrouter.ai/api/v1/",
             api_key=settings.OPENROUTER_API_KEY,
+            timeout=settings.MODEL_TIMEOUT_SECONDS,
+            max_retries=settings.MODEL_MAX_RETRIES,
         )
     if model_name in FakeModelName:
         return FakeToolModel(responses=["This is a test response from the fake model."])

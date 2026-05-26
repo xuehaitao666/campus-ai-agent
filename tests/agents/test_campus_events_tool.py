@@ -1,4 +1,16 @@
+from datetime import date
+
+from agents import tools
 from agents.tools import get_campus_events, get_campus_events_func
+
+
+def _freeze_today_to_event_fixture(monkeypatch):
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 5, 25)
+
+    monkeypatch.setattr(tools, "date", FixedDate)
 
 
 def test_get_campus_events_by_keyword():
@@ -25,7 +37,9 @@ def test_get_campus_events_by_target_audience():
     assert "软件工程" in result
 
 
-def test_get_campus_events_by_date_range():
+def test_get_campus_events_by_date_range(monkeypatch):
+    _freeze_today_to_event_fixture(monkeypatch)
+
     result = get_campus_events_func(date_range="最近")
 
     assert "AI Agent 技术分享会" in result
@@ -33,7 +47,9 @@ def test_get_campus_events_by_date_range():
     assert "大学生心理健康主题沙龙" in result
 
 
-def test_get_campus_events_with_combined_filters():
+def test_get_campus_events_with_combined_filters(monkeypatch):
+    _freeze_today_to_event_fixture(monkeypatch)
+
     result = get_campus_events_func(
         keyword="AI",
         date_range="最近",

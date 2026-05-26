@@ -25,6 +25,8 @@ class TraceRecord:
     user_id: str | None = None
     agent_id: str | None = None
     model_name: str | None = None
+    primary_model: str | None = None
+    fallback_model: str | None = None
     query: str | None = None
     route: str | None = None
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
@@ -38,6 +40,9 @@ class TraceRecord:
     completion_tokens: int | None = None
     total_tokens: int | None = None
     fallback_triggered: bool = False
+    model_error: str | None = None
+    model_error_type: str | None = None
+    model_attempt_count: int = 0
     error_message: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     event_type: str = "request"

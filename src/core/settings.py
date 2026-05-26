@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     # If DEFAULT_MODEL is None, it will be set in model_post_init
     DEFAULT_MODEL: AllModelEnum | None = None  # type: ignore[assignment]
     AVAILABLE_MODELS: set[AllModelEnum] = set()  # type: ignore[assignment]
+    MODEL_TIMEOUT_SECONDS: float = 60.0
+    MODEL_MAX_RETRIES: int = 2
+    ENABLE_MODEL_FALLBACK: bool = False
+    FALLBACK_MODEL: AllModelEnum | None = None  # type: ignore[assignment]
+    MODEL_TEMPERATURE: float = 0.5
 
     # Set openai compatible api, mainly used for proof of concept
     COMPATIBLE_MODEL: str | None = None
@@ -250,6 +255,11 @@ class Settings(BaseSettings):
                         raise ValueError(f"Missing required Azure deployments: {missing_models}")
                 case _:
                     raise ValueError(f"Unknown provider: {provider}")
+
+        if self.ENABLE_MODEL_FALLBACK and self.FALLBACK_MODEL is None:
+            raise ValueError(
+                "FALLBACK_MODEL must be configured when ENABLE_MODEL_FALLBACK is true."
+            )
 
     @computed_field  # type: ignore[prop-decorator]
     @property
