@@ -166,6 +166,100 @@ def _write_trace_safely(record: TraceRecord) -> None:
         logger.warning(f"Unable to write trace record: {e}")
 
 
+def _present_fields(values: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in values.items() if value not in (None, "")}
+
+
+def _trace_custom_data(record: TraceRecord) -> dict[str, Any]:
+    custom_data: dict[str, Any] = {}
+    if record.retrieved_docs:
+        retrieved_docs = [
+            _present_fields(
+                {
+                    "source": (
+                        document.get("source") if document.get("source") != "unknown" else None
+                    ),
+                    "chunk_id": document.get("chunk_id"),
+                    "section": document.get("section"),
+                    "heading_path": document.get("heading_path"),
+                    "policy_type": document.get("policy_type"),
+                    "retrieval_source": document.get("retrieval_source"),
+                    "hybrid_score": document.get("hybrid_score"),
+                }
+            )
+            for document in record.retrieved_docs
+        ]
+        custom_data["retrieved_docs"] = retrieved_docs
+        custom_data["source_citations"] = [
+            _present_fields(
+                {
+                    "source": (
+                        document.get("source") if document.get("source") != "unknown" else None
+                    ),
+                    "chunk_id": document.get("chunk_id"),
+                    "section": document.get("section"),
+                }
+            )
+            for document in record.retrieved_docs
+        ]
+
+    metrics = _present_fields(
+        {
+            "total_latency_ms": record.total_latency_ms,
+            "llm_time_ms": record.llm_time_ms,
+            "tool_time_ms": record.tool_time_ms,
+            "retrieval_time_ms": record.retrieval_time_ms,
+            "prompt_tokens": record.prompt_tokens,
+            "completion_tokens": record.completion_tokens,
+            "total_tokens": record.total_tokens,
+            "context_docs_count": record.context_docs_count,
+            "context_chars": record.context_chars,
+            "estimated_context_tokens": record.estimated_context_tokens,
+            "dropped_context_docs_count": record.dropped_context_docs_count,
+            "history_message_count": record.history_message_count,
+            "trimmed_message_count": record.trimmed_message_count,
+        }
+    )
+    if metrics:
+        custom_data["metrics"] = metrics
+
+    if record.tool_calls:
+        custom_data["tool_execution"] = [
+            _present_fields(
+                {
+                    "tool_name": call.get("name"),
+                    "status": "error" if record.error_message else "success",
+                    "latency_ms": record.tool_time_ms,
+                    "error": record.error_message,
+                }
+            )
+            for call in record.tool_calls
+        ]
+
+    if (
+        record.primary_model
+        or record.fallback_model
+        or record.fallback_triggered
+        or record.model_error
+    ):
+        custom_data["model_fallback"] = _present_fields(
+            {
+                "primary_model": record.primary_model,
+                "fallback_model": record.fallback_model,
+                "fallback_triggered": record.fallback_triggered,
+                "model_error": record.model_error,
+            }
+        )
+    return custom_data
+
+
+def _add_trace_custom_data(message: ChatMessage, record: TraceRecord) -> ChatMessage:
+    trace_data = _trace_custom_data(record)
+    for key, value in trace_data.items():
+        message.custom_data.setdefault(key, value)
+    return message
+
+
 def _maybe_handle_course_fast_path(
     user_input: UserInput,
     trace_record: TraceRecord,
@@ -324,8 +418,12 @@ async def invoke(user_input: UserInput, agent_id: str = DEFAULT_AGENT) -> ChatMe
     timer = TraceSpan().start()
     try:
         if output := _maybe_handle_course_fast_path(user_input, trace_record):
+            trace_record.total_latency_ms = timer.stop()
+            _add_trace_custom_data(output, trace_record)
             return output
         if output := _maybe_handle_event_fast_path(user_input, trace_record):
+            trace_record.total_latency_ms = timer.stop()
+            _add_trace_custom_data(output, trace_record)
             return output
         agent: AgentGraph = get_agent(agent_id)
         kwargs, run_id = await _handle_input(user_input, agent, trace_record.trace_id)
@@ -348,6 +446,8 @@ async def invoke(user_input: UserInput, agent_id: str = DEFAULT_AGENT) -> ChatMe
             raise ValueError(f"Unexpected response type: {response_type}")
 
         output.run_id = str(run_id)
+        trace_record.total_latency_ms = timer.stop()
+        _add_trace_custom_data(output, trace_record)
         return output
     except HTTPException as e:
         trace_record.error_message = str(e.detail)
@@ -373,9 +473,13 @@ async def message_generator(
     timer = TraceSpan().start()
     try:
         if output := _maybe_handle_course_fast_path(user_input, trace_record):
+            trace_record.total_latency_ms = timer.stop()
+            _add_trace_custom_data(output, trace_record)
             yield f"data: {json.dumps({'type': 'message', 'content': output.model_dump()})}\n\n"
             return
         if output := _maybe_handle_event_fast_path(user_input, trace_record):
+            trace_record.total_latency_ms = timer.stop()
+            _add_trace_custom_data(output, trace_record)
             yield f"data: {json.dumps({'type': 'message', 'content': output.model_dump()})}\n\n"
             return
         agent: AgentGraph = get_agent(agent_id)
@@ -452,6 +556,7 @@ async def message_generator(
                         add_token_usage(trace_record, message, accumulate=False)
                         chat_message = langchain_to_chat_message(message)
                         chat_message.run_id = str(run_id)
+                        _add_trace_custom_data(chat_message, trace_record)
                     except Exception as e:
                         logger.error(f"Error parsing message: {e}")
                         yield f"data: {json.dumps({'type': 'error', 'content': 'Unexpected error'})}\n\n"

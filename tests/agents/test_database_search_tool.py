@@ -3,6 +3,7 @@ from langchain_core.documents import Document
 
 from agents import tools as campus_tools
 from agents.tools import database_search, database_search_func, format_contexts
+from core.tracing import TraceRecord, bind_trace_record, generate_trace_id
 
 
 class FakeRetriever:
@@ -69,6 +70,36 @@ def test_database_search_preserves_enriched_context_metadata(monkeypatch):
     assert "Section: 作弊处理" in result
     assert "Heading Path: 考试纪律 > 作弊处理" in result
     assert "Policy Type: exam" in result
+
+
+def test_database_search_records_structured_retrieved_docs_for_response_metadata(monkeypatch):
+    documents = [
+        Document(
+            page_content="考试作弊将按照考试纪律处理。",
+            metadata={
+                "source": "exam_policy.md",
+                "chunk_id": "exam_policy.md::chunk-0001",
+                "section": "作弊处理",
+                "heading_path": "考试纪律 > 作弊处理",
+                "policy_type": "exam",
+                "retrieval_source": "vector+bm25",
+                "hybrid_score": 0.03,
+            },
+        )
+    ]
+    monkeypatch.setattr(campus_tools, "load_chroma_db", lambda: FakeRetriever(documents))
+    monkeypatch.setattr(campus_tools, "write_trace_jsonl", lambda record: None)
+    record = TraceRecord(trace_id=generate_trace_id(), route="invoke")
+
+    with bind_trace_record(record):
+        database_search_func("考试作弊有什么后果？")
+
+    retrieved = record.retrieved_docs[0]
+    assert retrieved["source"] == "exam_policy.md"
+    assert retrieved["chunk_id"] == "exam_policy.md::chunk-0001"
+    assert retrieved["section"] == "作弊处理"
+    assert retrieved["retrieval_source"] == "vector+bm25"
+    assert retrieved["hybrid_score"] == 0.03
 
 
 def test_database_search_tool_invokes_search_without_real_vector_store(monkeypatch):

@@ -119,7 +119,7 @@ class ChatMessage(BaseModel):
     )
     custom_data: dict[str, Any] = Field(
         description="Custom message data.",
-        default={},
+        default_factory=dict,
     )
 
     def pretty_repr(self) -> str:

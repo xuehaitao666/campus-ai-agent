@@ -11,6 +11,18 @@ from langchain_core.messages import (
 from schema import ChatMessage
 
 
+def _message_custom_data(message: BaseMessage) -> dict:
+    """Read optional structured data carried by LangChain messages."""
+    custom_data: dict = {}
+    additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+    response_metadata = getattr(message, "response_metadata", None) or {}
+    for metadata in (additional_kwargs, response_metadata):
+        value = metadata.get("custom_data") if isinstance(metadata, dict) else None
+        if isinstance(value, dict):
+            custom_data.update(value)
+    return custom_data
+
+
 def convert_message_content_to_string(content: str | list[str | dict]) -> str:
     if isinstance(content, str):
         return content
@@ -31,12 +43,14 @@ def langchain_to_chat_message(message: BaseMessage) -> ChatMessage:
             human_message = ChatMessage(
                 type="human",
                 content=convert_message_content_to_string(message.content),
+                custom_data=_message_custom_data(message),
             )
             return human_message
         case AIMessage():
             ai_message = ChatMessage(
                 type="ai",
                 content=convert_message_content_to_string(message.content),
+                custom_data=_message_custom_data(message),
             )
             if message.tool_calls:
                 ai_message.tool_calls = message.tool_calls
@@ -48,6 +62,7 @@ def langchain_to_chat_message(message: BaseMessage) -> ChatMessage:
                 type="tool",
                 content=convert_message_content_to_string(message.content),
                 tool_call_id=message.tool_call_id,
+                custom_data=_message_custom_data(message),
             )
             return tool_message
         case LangchainChatMessage():
