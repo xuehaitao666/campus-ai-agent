@@ -2,324 +2,305 @@
 
 ## 1. Project Overview
 
-Campus AI Agent 是一个面向校园服务场景的 AI Agent 项目，基于 FastAPI、Streamlit、LangGraph 与本地知识库实现统一问答入口。当前核心能力包括：
+Campus AI Agent 是面向大学校园场景的智能助理项目，以 FastAPI 提供 Agent API，以 Streamlit 提供交互界面，并通过 LangGraph 组织模型与工具调用。项目当前支持：
 
-- 课程安排查询：按星期、时间段或课程名称查询本地课程表。
-- 校园活动查询：按关键词、日期范围、活动类型和人群检索活动。
-- 学习计划生成：结合学生画像与课程时间形成规则化学习安排。
-- 校园制度问答：围绕请假、奖学金、宿舍、考试纪律等制度文档进行 RAG 检索与回答。
-- 多轮会话：通过 thread 级 checkpoint 恢复历史上下文。
-- 工具复用：通过只读 MCP Server Adapter 向外部 Agent / MCP Client 暴露校园查询工具。
+- 课程表查询与校园活动查询；
+- 校园制度 RAG 问答，包括请假、奖学金、宿舍与考试制度；
+- 学习计划生成；
+- 多轮会话历史恢复与裁剪；
+- 只读 Campus Tools MCP Server Adapter，供外部 MCP Client 复用课程、活动与制度查询工具；
+- Docker 双服务本地运行方案，用于复现 FastAPI 与 Streamlit 环境。
 
-本轮优化的主线不是继续堆叠功能，而是让系统具备可观测、可评估、可信回答、成本受控、故障可回退和能力可复用的工程基础。
+本轮优化的主线不是增加展示功能，而是把一个可运行的校园 Agent 逐步建设为可观测、可评估、可回退、可扩展并可复现的工程系统。
 
 ## 2. Initial Problems
 
-在优化前，项目已经能够完成多种校园任务，但存在以下工程问题：
+项目早期已经具备多个业务能力，但仍存在明显工程化缺口：
 
-| 问题 | 影响 |
+| Problem | Impact |
 | --- | --- |
-| 功能较多但缺少统一优化主线 | 很难解释性能瓶颈、改动收益与系统演进顺序 |
-| 缺少 Trace 与可提交 benchmark | 优化前后不能基于同题数据做客观比较 |
-| 课程、活动等确定性查询仍走完整 LLM 链路 | 引入不必要的模型耗时与 token 成本 |
-| RAG 请求重复初始化 embedding / Chroma / retriever | 制度问答检索阶段出现明显冷初始化开销 |
-| RAG 缺少 no-answer 边界 | 没有依据或低相关时存在生成确定性制度结论的风险 |
-| Chunk 与 metadata 不够结构化 | 来源只能粗略定位文件，不利于引用、评估和融合检索 |
-| 单一路径向量检索对强制度关键词不够稳定 | “挂科 + 奖学金”等词面明确问题缺少关键词通道支持 |
-| 检索候选可能过多进入模型上下文 | Prompt token 成本随 evidence 增长 |
-| 外部模型调用缺少统一 timeout / retry / fallback | 模型瞬时故障会直接导致请求失败，且难以追踪 |
-| 多轮历史可能持续增长 | 长会话模型上下文与 token 成本缺少上限 |
-| API 返回主要依赖文本内容 | 来源、指标与 fallback 状态难以被客户端结构化消费 |
-| 工具只能在项目主链路内使用 | 外部 Agent 缺少标准化、只读的复用出口 |
+| 功能堆叠，缺少统一优化主线 | 很难判断应该优先优化性能、可信度还是稳定性 |
+| 缺少 Trace 与 Benchmark | 无法用同题、同指标证明优化收益 |
+| RAG 每次重复初始化 embedding / Chroma / retriever | 制度查询存在不必要的秒级检索开销 |
+| 缺少 no-answer 机制 | 无依据或低相关召回时存在生成确定性制度结论的风险 |
+| Chunk 与 metadata 不够结构化 | 引用、评估、调试与后续检索增强受限 |
+| 检索召回和排序不够稳定 | 强制度关键词问题不能充分利用关键词信号 |
+| Prompt / context token 不可控 | Hybrid 候选增多后可能把低价值文本继续送入模型 |
+| 模型调用缺少 timeout / retry / fallback | 外部模型临时失败会直接影响用户请求 |
+| 长对话历史可能无限增长 | 多轮上下文成本和延迟随会话不断增加 |
+| API 返回缺少结构化 `custom_data` | 前端或调用方只能依赖回答文本，难以展示来源与指标 |
+| 缺少容器化复现方式 | 本地交付与演示需要手工配置多进程环境 |
 
 ## 3. Optimization Roadmap
 
 | Phase | 优化内容 | 解决的问题 | 涉及模块 | 验证方式 | 面试亮点 |
 | --- | --- | --- | --- | --- | --- |
-| Phase 1 | Agent Trace + Benchmark Run | 缺少可观测性与优化证据 | `core/tracing.py`, `service.py`, benchmark 导出脚本 | Trace JSONL、benchmark Markdown、测试 | 先度量再优化 |
-| Phase 2.1 | Rule-based Router | 高确定性意图无低成本识别入口 | `core/router.py` | 路由纯函数测试 | 可解释路由与 fallback 边界 |
-| Phase 2.2-2.4 | Course/Event Fast Path + 模板化响应 | 查表类请求仍耗费 LLM | `service.py`, query parsers, response templates | 同题课程 benchmark、service 测试 | 确定性请求零 token 响应 |
-| Phase 3.1 | RAG Retriever Cache | RAG 资源重复初始化 | `agents/tools.py` | cache 测试、同题 benchmark | 区分必要检索与不必要初始化 |
-| Phase 3.1.1 | Request-level Benchmark 导出 | child event 污染汇总样本 | `scripts/export_benchmark_run.py` | 导出脚本测试 | 数据对比口径治理 |
-| Phase 3.2 | no-answer + source citation | 无依据时幻觉风险、来源不可核验 | `agents/tools.py`, `rag_assistant.py` | 空召回/低相关/引用测试 | 把可信度约束放到工具边界 |
-| Phase 3.3 | 文档清洗 + heading-aware chunking + metadata | 索引语义边界与来源定位不足 | `rag/document_cleaner.py`, `rag/chunking.py`, build script | 建库与 retrieval quality 测试 | 在线质量从离线数据治理开始 |
-| Phase 3.4 | Hybrid Retrieval: BM25 + Vector + RRF | 强关键词召回稳定性不足 | `rag/hybrid_retriever.py`, `agents/tools.py` | Vector/Hybrid 黄金问题集 | 用 RRF 融合异构检索通道 |
-| Phase 3.5 | Prompt 拆分 + RAG Token Budget | Evidence context 成本缺少控制 | `core/token_budget.py`, `prompts/rag_prompts.py` | 同题 token benchmark、budget 测试 | 在保留来源下控制上下文成本 |
-| Phase 4.1 | Model timeout / retry / fallback | 外部模型故障缺少恢复策略 | `core/settings.py`, `core/llm.py`, model fallback helper | fake model 失败路径测试 | 可配置、可追踪的一次降级 |
-| Phase 4.2 | History 接口优化 + 上下文裁剪 | 历史接口粒度不足、对话上下文无限增长 | `schema.py`, `service.py`, `core/history.py` | 多轮历史/裁剪 Trace 测试 | 存完整历史，送模型有限窗口 |
-| Phase 4.3 | `ChatMessage.custom_data` 扩展 | API 缺少结构化 evidence 与 metrics | `schema.py`, `service/utils.py`, `service.py` | 序列化、invoke、SSE 测试 | 保持兼容的结构化响应演进 |
-| Phase 5.1 | Campus Tools MCP Server Adapter | 外部系统难以标准复用工具 | `mcp_server/` | MCP adapter 一致性与错误测试 | 不重构主链路的协议化开放 |
+| Phase 1 | Agent Trace + Benchmark Run | 缺少测量与留痕 | `src/core/tracing.py`, `scripts/export_benchmark_run.py`, `docs/optimization/benchmark_runs/` | Trace JSONL、导出报告、服务测试 | 先建立可测基线，再做优化 |
+| Phase 2.1 | Rule-based Router | 无法识别确定性查询 | `src/core/router.py` | Router 单元测试 | 用保守规则控制优化边界 |
+| Phase 2.2-2.4 | Course/Event Fast Path + 响应模板 | 简单查询仍走完整 LLM 链路 | `src/service/service.py`, query parser, response templates | 同题 benchmark、service 测试 | 保留 fallback 的低成本直查 |
+| Phase 3.1 | RAG Retriever Cache | 重复初始化成本 | `src/agents/tools.py` | Cache 测试、同题 benchmark | 区分必要检索与不必要初始化 |
+| Phase 3.1.1 | Request-level Benchmark 导出 | Child event 污染统计口径 | `scripts/export_benchmark_run.py` | 导出脚本测试 | 用干净样本比较优化 |
+| Phase 3.2 | No-answer + Source Citation | RAG 幻觉与不可追溯回答 | `src/agents/tools.py`, `src/agents/rag_assistant.py` | 空召回/低相关/引用测试 | 在工具层落实可信边界 |
+| Phase 3.3 | 文档清洗、标题切分、metadata 增强 | Chunk 语义与引用信息不足 | `src/rag/document_cleaner.py`, `src/rag/chunking.py`, build script | Chunk/build/retrieval tests | 离线数据质量决定 RAG 上限 |
+| Phase 3.4 | BM25 + Vector + RRF | 强关键词召回波动 | `src/rag/hybrid_retriever.py` | Hybrid 单测、黄金问题集 | 融合语义召回与精确关键词 |
+| Phase 3.5 | Prompt 拆分 + Token Budget | Context/token 成本不可控 | `src/core/token_budget.py`, `src/prompts/rag_prompts.py` | Budget 测试、同题 benchmark | 控制进入 LLM 的证据规模 |
+| Phase 3.6 | Optional RAG Reranker | 候选排序缺少 evidence 精选层 | `src/rag/reranker.py`, `src/agents/tools.py` | Reranker 与 retrieval quality 测试 | 召回、重排、预算职责分层 |
+| Phase 4.1 | Timeout / Retry / Fallback | 模型服务故障缺少降级 | `src/core/settings.py`, `src/core/llm.py`, agent model call | Fake/mock model 测试 | 可靠性配置化并可追踪 |
+| Phase 4.2 | History API + Context Trimming | 历史无限增长 | schema, service, agent model input | 多轮历史与裁剪测试 | 保留历史与限制模型上下文分离 |
+| Phase 4.3 | `ChatMessage.custom_data` | 响应缺少结构化附加信息 | schema, service utils/service | JSON/SSE 序列化测试 | 兼容扩展来源与观测字段 |
+| Phase 5.1 | MCP Server Adapter | 工具难以被外部 Agent 复用 | `src/mcp_server/` | MCP native consistency 测试 | 旁路标准化暴露，只读安全边界 |
+| Phase 6 | Docker 工程落地 | 环境复现成本高 | `Dockerfile`, `docker-compose.yml`, deployment docs | Compose 结构检查、pytest；启动命令交付 | 将优化成果转为可运行交付物 |
 
 ## 4. Key Technical Optimizations
 
-### Trace + Benchmark
+### 4.1 Trace + Benchmark
 
-Phase 1 在 `/invoke` 与 `/stream` 请求上建立 Trace，关联 `trace_id`、`run_id`、会话、Agent、模型、工具调用、RAG 文档、耗时、token 与异常信息，并将记录写为 JSONL。之后新增 benchmark 导出脚本，把最近 Trace 汇总为可提交 Markdown。
+Phase 1 引入请求级 `TraceRecord` 与 JSONL 落盘，把一次 Agent 调用的 `trace_id`、请求标识、路由、工具调用、检索来源、总耗时、模型耗时、工具耗时、token、fallback 与错误信息连接起来。随后提供 Markdown benchmark 导出机制，让性能结论不依赖口头描述。
 
-RAG 优化阶段进一步发现原始 `--last` 可能混入 `rag_retrieval` child event，因此导出机制增加 request-only / request-last 选择模式。正式前后对比可以只统计 request-level 数据，避免把子事件当成用户请求。
+Phase 3.1.1 进一步解决 RAG 子事件会混入 request summary 的问题，加入 request-level 筛选和 `--request-last` 导出方式。后续严肃对比应以 request-level 相同问题集为准。
 
-这一阶段的价值在于：后续优化不再依赖印象，而是有固定问题集、可追踪记录和一致指标口径。
+### 4.2 Rule-based Router + Fast Path
 
-### Fast Path
+Router 将课程查询、校园活动、学习计划、制度问答、普通聊天与未知请求区分开来。对于能可靠解析参数的课程与活动问题，service 直接调用已有工具，而不进入完整 LLM + LangGraph 工具调用闭环。
 
-Phase 2 为确定性高、数据源固定的课程与活动查询增加轻量路径：
+这一设计有两个关键约束：
 
-1. Rule-based Router 识别 `course_schedule` 与 `campus_event` 意图。
-2. Parser 从问题中提取课程或活动筛选条件。
-3. 能明确执行时，service 直接调用原有 native tool。
-4. 使用 Markdown 模板返回稳定响应，不调用 LLM。
-5. 无法解析或非目标意图时，继续 fallback 到原 Agent 链路。
+- Fast Path 复用原工具能力，不复制课程或活动业务逻辑；
+- 非目标意图或无法解析参数时，继续 fallback 到原 Agent 链路。
 
-这一设计没有替换 Agent，也没有复制课程/活动业务逻辑；优化的是 LLM 参与确定性查表请求的必要性。
+模板化响应为不调用 LLM 的直查结果提供稳定 Markdown 输出，同时不恢复 token 开销。
 
-### RAG Retriever Cache
+### 4.3 RAG Retriever Cache
 
-Phase 3.1 明确区分了 RAG 的两类成本：
+制度查询原本会重复初始化 embedding、Chroma 与 retriever。缓存优化只缓存可复用资源，仍要求每个 query 执行真实 `retriever.invoke(query)`；知识库更新后可通过 `clear_rag_cache()` 或服务重启失效缓存。
 
-- 必要成本：每个新 query 都必须执行实际检索。
-- 不必要成本：每次请求重复初始化 embedding、Chroma 与 retriever。
+这一阶段没有改回答内容、prompt 或召回策略，因而能够较清晰地将检索耗时变化归因于重复初始化消除。
 
-实现使用进程内缓存复用 embedding 与 retriever，并提供 `clear_rag_cache()` 供知识库重建或测试隔离时清理缓存。查询本身仍每次执行，不改变用户问题对应的检索行为。
+### 4.4 No-answer + Source Citation
 
-### no-answer + source citation
+RAG 可信度约束落在工具层，而非只交给 prompt：
 
-校园制度属于高可信回答场景。Phase 3.2 将 no-answer 放在工具层而不只依赖 prompt：
+- 空召回或轻量规则判定低相关时，直接返回“当前知识库中没有找到明确依据”的 no-answer；
+- no-answer 提示用户以学校官方通知或辅导员答复为准，并明确不得编造制度、电话、办公室或网址；
+- 有有效 evidence 时，回答保留 `source` 与 `chunk_id` 引用。
 
-- 空检索结果直接返回“当前知识库中没有找到明确依据”。
-- 内容过短或制度关键词完全不匹配时，按低相关结果拒答。
-- no-answer 明确建议以学校官方通知或辅导员答复为准，并禁止编造制度细节、电话、办公室和网址。
-- 有有效证据时，保留 `source` 与 `chunk_id` 来源引用。
+这样即使模型层发生波动，制度回答的证据边界也更清晰。
 
-工具层约束意味着即便模型存在生成倾向，也不会收到空白或明显无关的上下文后自由补制度结论。
+### 4.5 Metadata + Heading-aware Chunking
 
-### Metadata + Heading-aware Chunking
+离线建库从简单固定长度切分演进为保留 Markdown 标题语义的切分流程，并增加文档清洗。每个 chunk 可携带：
 
-Phase 3.3 将优化延伸到离线建库：
+- `source`
+- `path`
+- `chunk_id`
+- `section`
+- `heading_path`
+- `policy_type`
 
-- 对 Markdown 做保守清洗：统一换行、删除行尾空格、压缩过量空行，同时保留标题、列表与表格。
-- 先依据 `#` / `##` / `###` 标题形成章节级片段，长章节再继续固定长度切分。
-- Chunk metadata 增强为 `source`、`path`、`chunk_id`、`section`、`heading_path` 与 `policy_type`。
+这些字段同时服务于引用展示、黄金问题评估、Hybrid 去重、Reranker 特征以及结构化 API 输出。
 
-这让回答可以定位到制度章节，为来源展示、检索质量分析和后续融合检索提供结构化基础。
+### 4.6 Hybrid Retrieval
 
-### Hybrid Retrieval
+Hybrid Retrieval 采用三段式设计：
 
-Phase 3.4 为制度强关键词场景增加 BM25 通道：
+1. Vector retrieval 提供语义召回；
+2. BM25 以轻量中文 bigram 捕捉制度关键词；
+3. RRF 按排名融合两路候选，并以 `chunk_id` 去重。
 
-- Vector retrieval 负责语义相似召回。
-- BM25 使用轻量中文 bigram 处理“请假”“奖学金”“宿舍”“晚归”“作弊”等明确关键词。
-- RRF 使用排名而非原始分数融合两路结果，避免向量分数与 BM25 分数尺度不一致。
-- 结果按 `chunk_id` 去重，并记录 `retrieval_source`、`hybrid_score`、`vector_rank` 与 `bm25_rank`。
+结果 metadata 记录 `retrieval_source`、`hybrid_score`、`vector_rank` 与 `bm25_rank`。RRF 的价值在于无需强行比较不同量纲的 vector score 与 BM25 score。
 
-原 no-answer 与来源引用逻辑继续位于融合结果之后，因此增强召回的同时保留可信回答边界。
+### 4.7 RAG Reranker
 
-### Token Budget
+Phase 3.6 在 Hybrid Retrieval 与 Token Budget 之间引入默认关闭的可选 reranker。第一版采用轻量规则打分，不下载大型模型，综合：
 
-Hybrid Retrieval 提升召回候选后，并不应将所有 evidence 无限制传入 LLM。Phase 3.5 增加：
+- query 与正文词项重合；
+- query 与 `section` / `heading_path` 重合；
+- query 与 `policy_type` 匹配；
+- 原有 `hybrid_score` 辅助信号。
 
-- 拆分后的 RAG prompt 约束；
-- 按当前排序保留高优先级 evidence 的上下文选择；
-- 默认最多 `5` 个文档、总 context `6000` 字符、单 chunk `1500` 字符；
-- `context_docs_count`、`context_chars`、`estimated_context_tokens` 与 `dropped_context_docs_count` Trace 指标。
+重排结果保留所有来源 metadata，并加入 `rerank_score`。若重排失败，则安全退回原候选排序并记录 `rerank_error`。当前这一能力通过单测和黄金来源 top-k 验证，尚无独立 before/after latency 或 rank benchmark。
 
-预算只控制进入模型的有效上下文，不改变检索排序，也不裁剪 no-answer 的关键安全提示。
+### 4.8 Token Budget
 
-### Model Fallback
+Hybrid Retrieval 提升召回后，不应无上限将候选内容填入 prompt。Token Budget 将“已召回 documents”与“进入 LLM 的 context”区分开来，默认限制：
 
-Phase 4.1 为模型层增加可靠性边界：
+| Limit | Value |
+| --- | ---: |
+| 最大 context 文档数 | `5` |
+| 总格式化 context 字符数 | `6000` |
+| 单 chunk 字符数 | `1500` |
 
-- 统一配置 `MODEL_TIMEOUT_SECONDS`、`MODEL_MAX_RETRIES` 与 `MODEL_TEMPERATURE`。
-- 通过 `ENABLE_MODEL_FALLBACK` 和 `FALLBACK_MODEL` 显式开启候补模型。
-- 主模型失败后最多尝试一次不同的 fallback model。
-- 相同模型不会循环调用，候补失败会返回稳定错误。
-- Trace 记录 primary/fallback model、触发状态、错误类型和尝试次数。
+上下文筛选保留 `source`、`chunk_id`、`section`、`heading_path` 与 `policy_type`，no-answer 判定仍位于预算裁剪之前，避免安全提示被误裁。
 
-该策略保持保守：默认关闭 fallback，不进行动态模型评分或无边界重试。
+### 4.9 Model Fallback
 
-### History Trimming
+模型可靠性层统一引入 timeout、provider retry、temperature 与可选 fallback 配置。主模型成功时不额外调用；主模型失败且开启 fallback 时，仅尝试一次不同的候补模型；候补也失败时返回稳定失败路径，避免循环重试。
 
-Phase 4.2 区分了“历史应可恢复”与“模型必须读取全部历史”：
+Trace 可记录 `primary_model`、`fallback_model`、`fallback_triggered`、`model_error`、`model_error_type` 与尝试次数，为后续恢复率和模型成本分析提供入口。
 
-- `/history` 新增 `agent_id`、`limit` 与 `include_tools`。
-- `HISTORY_MAX_MESSAGES` 默认限制送入模型的最近非 system 消息数为 `20`。
-- System message 与最新用户输入始终保留。
-- Checkpoint 中的完整历史不被删除。
-- Trace 记录裁剪前消息数、裁剪数量和配置上限。
+### 4.10 History Trimming
 
-这一策略先控制多轮 token 增长，同时避免过早引入摘要正确性或长期记忆召回的新风险。
+History API 支持 `agent_id`、`limit` 与 `include_tools`，让调用方可以选择读取指定 Agent 的最近历史，并决定是否保留工具中间消息。
 
-### `custom_data`
+模型调用前另设 `HISTORY_MAX_MESSAGES` 最近消息窗口：checkpoint 仍能保存完整会话用于恢复，但每次进入模型的上下文不会无限增长。Trace 记录历史消息数量与裁剪数量，使成本变化可以观测。
 
-Phase 4.3 使用 `ChatMessage.custom_data` 建立兼容的结构化输出通道，当前可携带：
+### 4.11 `ChatMessage.custom_data`
 
-- `retrieved_docs`
-- `source_citations`
+`content` 适合人类阅读，不适合作为结构化数据通道。项目在保持旧消息兼容的情况下，通过 `ChatMessage.custom_data` 传递：
+
+- `retrieved_docs` 与 `source_citations`
 - `metrics`
 - `tool_execution`
 - `model_fallback`
 
-回答正文与原有 SSE 外层协议保持不变；现有前端仍可只显示 `content`，未来前端可选择展示引用、性能指标或 fallback 状态。该方式避免了从 Markdown 正文反解析结构化证据。
+这为后续前端来源卡片、调试面板与 API 消费者提供了稳定入口，又避免当前阶段大改 schema 与前端。
 
-### MCP Server Adapter
+### 4.12 MCP Server Adapter
 
-Phase 5.1 增加旁路、只读 MCP server `campus-ai-agent-tools`，暴露：
+MCP 接入采用旁路 Adapter，而不是重构主 Agent。第一版只读暴露：
 
 | MCP Tool | Native Function |
 | --- | --- |
 | `get_course_schedule` | `get_course_schedule_func` |
 | `get_campus_events` | `get_campus_events_func` |
-| `query_campus_policy` | `query_campus_policy_func` |
+| `query_campus_policy` | `query_campus_policy_func` / 既有制度查询能力 |
 
-Adapter 不复制业务逻辑，仅封装 JSON 可序列化结果、`transport="mcp"`、`latency_ms` 与安全错误 envelope。主 FastAPI、Streamlit 与 LangGraph 流程没有改为强制使用 MCP。
+Adapter 返回 JSON 可序列化 envelope 与耗时，失败不暴露 traceback；安全边界明确不包含 shell、文件写入、删除、邮件或任意网络副作用。MCP server 采用 stdio transport，不改变 FastAPI / Streamlit / LangGraph 主流程。
+
+### 4.13 Docker Deployment
+
+Phase 6 新增基于 `python:3.11-slim` 与 `uv` 的统一镜像，并通过 `docker-compose.yml` 提供两个最小服务：
+
+- `backend`：FastAPI，端口 `8080`；
+- `frontend`：Streamlit，端口 `8501`，通过容器网络访问 backend。
+
+`./data` 与 `./logs` 作为 volume 持久化向量库、SQLite checkpoint 与 Agent Trace；`.env` 以只读挂载进入容器而不写入镜像。MCP stdio 服务不作为长驻 Web 服务加入主 compose。
 
 ## 5. Quantitative Results
 
-### Course Fast Path: Same Five Questions
+### 5.1 Course Fast Path
 
-来源：`course_fast_path_comparison.md`，基于五个相同课程问题的 before / after benchmark。
+数据来源：`course_fast_path_comparison.md` 与对应 before/after 五题 benchmark。测试问题为五个完全相同的课程查询。
 
-| 指标 | Before | After | 变化 |
+| Metric | Before: Full Agent Chain | After: Course Fast Path | Change |
 | --- | ---: | ---: | ---: |
-| 平均 `total_latency_ms` | `3535.00 ms` | `1.19 ms` | 下降 `3533.81 ms`，约 `99.97%` |
+| 平均 `total_latency_ms` | `3535.00 ms` | `1.19 ms` | 下降 `3533.81 ms` (`99.97%`) |
 | 平均 `llm_time_ms` | `3502.92 ms` | `0.00 ms` | 下降 `3502.92 ms` |
 | 平均 `prompt_tokens` | `5329.00` | `0.00` | 节省 `5329.00` |
-| 平均 `completion_tokens` | `190.00` | `0.00` | 节省 `190.00` |
 | 平均 `total_tokens` | `5519.00` | `0.00` | 节省 `5519.00` |
 
-After 的五条课程请求均命中 `course_schedule_fast_path`，且仍记录了 `get_course_schedule` 工具调用。这表明系统移除的是不必要的 LLM 环节，而不是课程查询能力。
+After 样本均命中 `course_schedule_fast_path`，且仍调用 `get_course_schedule`，说明降低成本的同时保留了原领域工具能力。
 
-活动 Fast Path 已有命中后的真实记录：`这周有什么 AI 相关讲座？` 和 `最近有没有比赛可以报名？` 均为 `campus_event_fast_path`，`llm_time_ms=0`、`total_tokens=0`。由于没有保存完全同题的 before 活动 benchmark，本文不计算活动前后下降比例。
+### 5.2 Campus Event Fast Path
 
-### RAG Retriever Cache: Strict Overlapping Queries
+`after_phase2_fast_path_templates` benchmark 记录了两条活动 Fast Path 实测样本：
 
-来源：`rag_retriever_cache_comparison.md`。原 before / after 样本均包含 child event，严格对比仅使用两个重合 request-level 问题。
+| Query | Route | Tool | `total_latency_ms` | `llm_time_ms` | `total_tokens` |
+| --- | --- | --- | ---: | ---: | ---: |
+| 这周有什么 AI 相关讲座？ | `campus_event_fast_path` | `get_campus_events` | `1.21 ms` | `0` | `0` |
+| 最近有没有比赛可以报名？ | `campus_event_fast_path` | `get_campus_events` | `0.85 ms` | `0` | `0` |
 
-| 指标 | Before Average | After Average | 变化 |
+现有文档中没有相同活动问题的 before benchmark，因此这里只陈述 after 实测结果，不计算严格下降比例。
+
+### 5.3 RAG Retriever Cache
+
+缓存 benchmark 的 before request 样本为 2、after request 样本为 3；严格同题比较基于两条重合制度问题。
+
+| Overlapping-query Metric | Before | After | Change |
 | --- | ---: | ---: | ---: |
-| `retrieval_time_ms` | `16876.33 ms` | `38.21 ms` | 下降约 `99.8%` |
-| `total_latency_ms` | `24804.17 ms` | `7627.18 ms` | 下降约 `69.3%` |
+| 平均 `retrieval_time_ms` | `16876.33 ms` | `38.21 ms` | 下降约 `99.8%` |
+| 平均 `total_latency_ms` | `24804.17 ms` | `7627.18 ms` | 下降约 `69.3%` |
 
-单题检索阶段表现：
+召回来源未出现明显退化：
 
-| 问题 | Before `retrieval_time_ms` | After `retrieval_time_ms` | 下降 |
+- “考试作弊有什么后果？” before / after 均召回 `exam_policy.md`；
+- “如果我因为生病缺考怎么办？” before / after 均召回 `leave_policy.md` 与 `exam_policy.md`；
+- after 中“宿舍晚归会怎么处理？”召回 `dormitory_policy.md`。
+
+该阶段优化目标是检索初始化成本，而非 LLM token；总耗时仍会受生成阶段波动影响。
+
+### 5.4 RAG Token Budget
+
+数据来源：五个相同 RAG 问题的 request-level before/after benchmark。
+
+| Metric | Before | After | Change |
 | --- | ---: | ---: | ---: |
-| 考试作弊有什么后果？ | `15714.98 ms` | `36.57 ms` | 约 `99.8%` |
-| 如果我因为生病缺考怎么办？ | `18037.67 ms` | `39.85 ms` | 约 `99.8%` |
+| 平均 `prompt_tokens` | `10809.60` | `10680.60` | 下降 `129.00` (`1.2%`) |
+| 平均 `completion_tokens` | `498.60` | `432.60` | 下降 `66.00` (`13.2%`) |
+| 平均 `total_tokens` | `11308.20` | `11113.20` | 下降 `195.00` (`1.7%`) |
+| 平均 `total_latency_ms` | `11274.15 ms` | `9681.98 ms` | 下降 `1592.17 ms` (`14.1%`) |
 
-来源检查显示：考试作弊问题 before/after 都包含 `exam_policy.md`；生病缺考问题 before/after 都包含 `leave_policy.md` 与 `exam_policy.md`。在已观察样本中，缓存没有表现出明显来源退化。
+五题核心来源仍保留；本阶段的主要目标是控制 evidence context 和 token，而不是承诺总延迟必然降低。
 
-### RAG Token Budget: Request-level Five-question Comparison
+### 5.5 RAG Reranker
 
-来源：`rag_token_budget_comparison.md`。两侧都使用 `request-last`，各包含同一组 `5` 条 request-level 制度问题。
+当前没有已导出的 reranker before/after benchmark，因此不编造 `rerank_latency_ms` 或 `expected_source_rank` 改善数据。现阶段已通过：
 
-| 指标 | Before | After | 变化 |
-| --- | ---: | ---: | ---: |
-| 平均 `prompt_tokens` | `10809.60` | `10680.60` | 下降 `129.00`，约 `1.2%` |
-| 平均 `completion_tokens` | `498.60` | `432.60` | 下降 `66.00`，约 `13.2%` |
-| 平均 `total_tokens` | `11308.20` | `11113.20` | 下降 `195.00`，约 `1.7%` |
-| 平均 `total_latency_ms` | `11274.15 ms` | `9681.98 ms` | 下降 `1592.17 ms`，约 `14.1%` |
+- Reranker 排序、top-k、metadata 保留与异常降级单元测试；
+- 启用 reranker 后黄金问题的正确制度来源仍位于 top-k；
+- Trace 字段已具备 `rerank_latency_ms`、重排输入/输出数量和重排来源记录能力。
 
-五题 after 记录仍保留核心期望来源：`leave_policy.md`、`scholarship_policy.md`、`dormitory_policy.md`、`exam_policy.md`，跨制度缺考问题仍保留考试与请假来源。本阶段目标主要是控制 context / prompt token；总延迟仍会受到模型生成波动影响。
-
-### Optimizations Verified by Tests and Trace
-
-以下能力已有测试或 Trace 字段验证，但当前没有可引用的独立 before/after 性能数字，因此不作量化收益推断：
-
-| 能力 | 已验证内容 |
-| --- | --- |
-| no-answer + citation | 空召回/低相关拒答、来源与 `chunk_id` 保留 |
-| Heading-aware metadata | chunk metadata 字段完整，policy type 与来源评估通过 |
-| Hybrid Retrieval | Vector 与 Hybrid 黄金问题来源测试通过 |
-| Model fallback | 主模型成功、关闭 fallback、一次降级、双失败与 Trace 路径均有 fake model 测试 |
-| History trimming | `agent_id` / `limit` / `include_tools` 与裁剪计数 Trace 测试通过 |
-| `custom_data` | `/invoke` 与 `/stream` 结构化元数据兼容测试通过 |
-| MCP Adapter | native tool 内容一致性、安全错误 envelope 与只读注册清单测试通过 |
+正式定量评估应在相同制度问题集上分别采集关闭与开启 reranker 的 request-level benchmark。
 
 ## 6. Testing Strategy
 
-### Unit and Contract Tests
+项目优化采用“功能安全网 + 性能证据”两层验证：
 
-优化过程采用按风险面补测试的策略：
+| Verification Layer | Coverage |
+| --- | --- |
+| 单元测试 | Router、parser、模板、token budget、chunking、Hybrid、Reranker、settings、fallback 等纯逻辑 |
+| Agent/Tool 测试 | 工具调用闭环、Database Search、no-answer、source citation、RAG Agent |
+| RAG 黄金问题集 | 校园制度问题的正确 `source` / `policy_type` 召回，包含 Vector、Hybrid 与 Reranker 场景 |
+| Benchmark request-level 导出 | 排除 child event 后比较相同问题的 latency 与 token |
+| Fake/mock model | 验证 timeout / fallback 成功、失败与不循环重试路径，不调用真实模型 API |
+| History 测试 | `thread_id` 隔离、`agent_id`、`limit`、`include_tools` 与模型上下文裁剪 |
+| Schema/SSE 测试 | `custom_data` JSON 序列化、invoke/stream 兼容与结构化来源透传 |
+| MCP consistency 测试 | MCP adapter 与 native 工具同输入结果一致、只读工具注册与安全错误 envelope |
+| Docker 校验 | `docker-compose.yml` 双服务结构已校验；当前执行环境未安装 Docker，实际 `compose build/up` 命令已交付文档 |
 
-- Router、parser 与 response template 使用纯函数测试保护规则边界。
-- Fast Path 使用 service 测试确认命中时不调用原 Agent / LLM，fallback 行为保持不变。
-- RAG 工具使用 fake retriever，覆盖来源、空结果、低相关、缓存和异常路径。
-- Fallback 使用 fake model / monkeypatch，避免依赖真实模型 API。
-- History、schema 与 SSE 使用 mock agent 验证接口兼容和序列化行为。
-- MCP adapter 比较同输入下 native function 与 adapter 内容，验证只读工具与可控错误格式。
-
-### RAG Retrieval Quality Golden Set
-
-`tests/rag/test_retrieval_quality.py` 建立了校园制度黄金问题集，围绕：
-
-- 请假流程；
-- 奖学金与挂科；
-- 宿舍晚归；
-- 考试作弊；
-- 生病缺考。
-
-该测试检查 top-k 中是否包含期望 source，并在 metadata / Hybrid 阶段继续验证制度类型与融合结果。当前测试中 vector baseline 的 `correct_doc_recall` 断言为 `1.0`，Hybrid 模式也对关键制度问题保留期望来源断言。
-
-### Benchmark Discipline
-
-Trace JSONL 与 Markdown benchmark 支持：
-
-- 固定问题集前后对比；
-- `request-last` 排除 RAG child event；
-- 记录 latency、token、tool call、retrieved docs 与错误字段；
-- 保留 commit、样本数量和选择方式信息。
-
-需要注意：早期 retriever cache benchmark 尚未使用完全 request-level 对齐数据，因此最终报告只引用其两条严格重合问题；Token Budget benchmark 已使用五条 request-level 同题对比。
-
-### Latest Full Test Run
-
-在 Phase 5.1 完成后的最新一次全量 pytest 回归记录为：
+本次收口后的本地测试运行结果为：
 
 ```text
-315 passed, 2 skipped, 9 warnings
+326 passed, 2 skipped, 9 warnings
 ```
 
-警告主要来自既有依赖弃用提示与测试 mock 行为，不影响上述通过结论。
+测试通过 `.venv/bin/pytest -q` 执行；当前运行环境未提供 `uv` 命令。Warnings 主要来自已有 LangGraph / Starlette 弃用提示与测试 mock 资源告警，不属于本阶段新增失败。
 
 ## 7. Engineering Value
 
-| 价值 | 体现 |
+| Value | Result |
 | --- | --- |
-| 可观测 | 每次请求与 RAG 子事件具备 Trace、耗时、token、来源与错误信息 |
-| 可评估 | 固定问题集、黄金召回测试与 request-level benchmark 支持前后比较 |
-| 可追溯 | RAG 回答保留 `source`、`chunk_id`、section metadata，并能进入结构化响应 |
-| 可回退 | Fast Path 解析不足时回到原 Agent；模型故障时支持受控 fallback |
-| 成本受控 | 查表请求跳过 LLM；Retriever 复用；RAG context 与历史上下文均有预算 |
-| 可信度增强 | 工具层 no-answer 与来源引用降低无依据制度回答风险 |
-| 接口可扩展 | `custom_data` 为未来来源卡片、指标面板与调试能力提供兼容承载层 |
-| 能力可复用 | MCP Adapter 将三个只读校园工具标准化开放给外部 Agent |
+| 可观测 | Trace 记录路由、工具、检索、模型、历史裁剪、fallback 与 reranker 事件 |
+| 可评估 | 固定问题集、黄金召回测试与 request-level benchmark 可验证优化效果 |
+| 可追溯 | RAG 回答保留 `source` / `chunk_id`，API 可传递结构化 citations |
+| 可回退 | Fast Path 未命中回原 Agent；reranker 异常回原排序；模型失败可配置 fallback |
+| 可控 token 成本 | 确定性 Fast Path 跳过 LLM，RAG Token Budget 限制 evidence context，历史窗口避免无限膨胀 |
+| 可扩展接口 | `custom_data` 为来源、指标和未来 UI 展示保留兼容通道 |
+| 可被 MCP 复用 | 只读校园工具可由外部 MCP Client 调用，无需侵入主 Agent 流程 |
+| 可容器化复现 | FastAPI / Streamlit 可通过统一 Docker 镜像与 compose 在本地复现 |
 
 ## 8. Interview Talking Points
 
-1. 我没有先凭经验改代码，而是先实现 Trace 与 benchmark，通过真实样本确认课程查询的主要成本来自完整 LLM 链路。
-2. 对课程和活动这类确定性请求，我使用保守规则路由和参数解析建立 Fast Path；解析不明确时仍回退 Agent，兼顾性能与正确性。
-3. 五个相同课程问题优化后，平均总耗时从 `3535.00 ms` 降到 `1.19 ms`，平均总 token 从 `5519` 降到 `0`，并继续调用原课程工具。
-4. 在 RAG 性能优化中，我区分每次必须执行的检索和不应重复承担的初始化；缓存后两条严格同题样本的平均检索耗时从约 `16.9s` 降至约 `38ms`。
-5. 对制度问答，我把 no-answer 做在工具边界而非只写 prompt，避免没有依据时模型自行补流程、联系方式或制度结论。
-6. 我从离线索引质量入手增加 Markdown 清洗、标题感知切分与 metadata，使来源可以追踪到文档片段与章节，而不是只有文件名。
-7. 对强关键词制度问题，我用 BM25 补充向量检索，并通过 RRF 融合不同分数尺度的排名；黄金问题集保护召回来源不退化。
-8. Hybrid Retrieval 后我进一步控制送入模型的 evidence context。五题 request-level benchmark 中，平均 prompt tokens 下降 `129`，同时保留核心来源。
-9. 在可靠性上，我实现了统一 timeout/retry/temperature 配置和一次受控 model fallback，并将失败与降级信息写入 Trace。
-10. 我把完整历史恢复与模型上下文成本分开：checkpoint 不丢历史，模型仅接收有限窗口；再通过 `custom_data` 和只读 MCP Adapter 为前端展示与外部复用准备扩展接口。
+1. 我没有一开始就盲目改架构，而是先补 Trace 与 Benchmark，让优化前后能通过固定问题集和真实指标对比。
+2. Trace 显示简单课程查询仍经过完整 LLM 链路，因此我以保守 Router + Fast Path 处理确定性问题，并保留原 Agent fallback；五个同题课程请求的平均耗时从 `3535.00 ms` 降至 `1.19 ms`，平均 token 从 `5519` 降至 `0`。
+3. 对 RAG 性能我区分了必要成本和不必要成本：每次 query 的检索是必要的，重复初始化 embedding / Chroma / retriever 是不必要的；缓存后两条同题样本平均检索耗时从约 `16.9 s` 降到约 `38 ms`。
+4. 我把 RAG 可信度约束放在工具边界：空召回或低相关直接 no-answer，有证据则保留 `source` 与 `chunk_id`，避免只靠 prompt 约束幻觉。
+5. 我将 Markdown 文档清洗、heading-aware chunking 和 metadata 增强作为离线质量基础，让 citation、检索评估、Hybrid 去重与后续排序使用同一套可解释字段。
+6. 针对校园制度强关键词场景，我组合 Vector、BM25 与 RRF：语义召回和精确词召回各司其职，融合时不强行比较不同分数尺度。
+7. Hybrid 提高召回后，我又将“候选召回”“证据重排”“上下文预算”拆成独立层；Reranker 默认关闭且异常可降级，Token Budget 则在保留引用的前提下控制输入成本。
+8. 系统可靠性方面，我统一配置 timeout/retry/fallback，并通过 mock model 测试失败链路；这让外部模型波动可以恢复、可以追踪、也不会无限重试。
+9. 多轮会话中，我区分完整历史存储与每轮模型上下文：history 可以恢复和筛选，模型只消费最近窗口，避免 token 随会话无限增长。
+10. 在集成与交付层，我用 `custom_data` 提供兼容的结构化响应，用只读 MCP Adapter 开放工具复用，再用 Docker 将 FastAPI、Streamlit、数据与 Trace 的本地运行方式标准化。
 
 ## 9. Limitations and Future Work
 
-当前系统仍有明确的下一阶段空间：
+当前系统仍有明确的演进空间：
 
-| 局限 | 后续方向 |
-| --- | --- |
-| Hybrid Retrieval 尚未引入 reranker | 在黄金问题集与 no-answer 集上评估轻量 reranker，对 Hybrid top-N 重排 |
-| Token 预算为轻量估算 | 按实际模型接入 tokenizer，并对预算与真实 token 做校准 |
-| 尚未支持长期记忆或摘要记忆 | 在保留最近窗口基础上，引入可评估的用户画像或摘要层 |
-| 知识库重建仍以全量流程为主 | 增加增量索引、变更检测与缓存自动失效策略 |
-| `custom_data` 当前为 `dict[str, Any]` | 演进为 `RetrievedDocument`、`MessageMetrics`、`ModelFallbackInfo` 等强类型 schema |
-| MCP 当前是旁路 server adapter | 后续可让主 Agent 作为可配置 MCP client，并加入 `trace_id` 透传与 adapter overhead benchmark |
-| 部署侧观测仍以本地 Trace/benchmark 为主 | 接入运行监控、错误率与成本仪表盘、告警策略 |
-| MCP 与业务 API 权限边界尚为基础版 | 引入鉴权、工具级授权、审计日志与调用配额控制 |
+- Reranker 第一版是轻量可配置 heuristic，实现稳定、无大模型依赖，但后续可在评估集足够后替换或增加 CrossEncoder，并比较排序质量与延迟代价。
+- 当前尚未做长期记忆或摘要记忆；现阶段仅通过窗口裁剪控制上下文增长。
+- MCP 当前是只读旁路 server adapter，主 LangGraph Agent 尚未作为 MCP client 消费外部工具。
+- `custom_data` 当前为灵活的 `dict`，后续可升级为 `RetrievedDocument`、`MessageMetrics`、`ToolExecution` 等强类型 schema。
+- Docker 方案是本地工程复现入口，不是生产级云部署；目前没有 Nginx、HTTPS、Kubernetes、secrets manager 或弹性扩缩容。
+- 后续可继续建设增量索引、权限与审计控制、CI/CD、线上监控告警以及模型/token 成本看板。
 
-下一步应继续沿用本项目已经建立的原则：先定义风险与指标，再用固定测试集和 request-level benchmark 验证收益，避免仅为了增加功能而扩大系统复杂度。
+最终而言，本项目已从一个具备校园问答功能的 Agent 原型，演进为拥有性能证据、可信 RAG 边界、故障降级、结构化响应、工具复用出口和本地交付路径的工程化系统。
