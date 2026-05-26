@@ -1,11 +1,13 @@
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 from rag.hybrid_retriever import hybrid_search
+from rag.reranker import maybe_rerank_documents
 from scripts.build_campus_kb import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
@@ -172,3 +174,36 @@ def test_hybrid_golden_question_retrieves_expected_policy_source(
     assert correct_policy_type_recall(expected_sources, documents)
     assert all(document.metadata["retrieval_source"] for document in documents)
     assert all(document.metadata["hybrid_score"] > 0 for document in documents)
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_sources"),
+    GOLDEN_QUESTIONS[:4],
+    ids=["reranked-leave", "reranked-scholarship", "reranked-dormitory", "reranked-exam"],
+)
+def test_reranked_hybrid_results_keep_expected_policy_in_top_k(
+    hybrid_policy_retrieval_components,
+    question,
+    expected_sources,
+):
+    retriever, bm25_documents = hybrid_policy_retrieval_components
+    candidates = hybrid_search(
+        question,
+        retriever,
+        bm25_documents,
+        top_k=8,
+        vector_k=8,
+        bm25_k=8,
+    )
+    documents = maybe_rerank_documents(
+        question,
+        candidates,
+        SimpleNamespace(
+            ENABLE_RAG_RERANKER=True,
+            RAG_RERANK_TOP_N=8,
+            RAG_FINAL_TOP_K=TOP_K,
+        ),
+    )
+
+    assert correct_doc_recall(expected_sources, retrieved_sources(documents))
+    assert all(document.metadata["rerank_score"] >= 0 for document in documents)

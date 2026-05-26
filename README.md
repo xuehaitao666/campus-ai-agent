@@ -31,19 +31,31 @@ curl -LsSf https://astral.sh/uv/0.7.19/install.sh | sh
 
 # Install dependencies. "uv sync" creates .venv automatically
 uv sync --frozen
-source .venv/bin/activate
-python src/run_service.py
+uv run python src/run_service.py
 
 # In another shell
-source .venv/bin/activate
-streamlit run src/streamlit_app.py
+uv run streamlit run src/streamlit_app.py
 ```
 
 Run with docker
 
 ```sh
-echo 'OPENAI_API_KEY=your_openai_api_key' >> .env
-docker compose watch
+cp .env.example .env
+# Edit .env and configure at least one model provider
+mkdir -p data logs
+docker compose -f docker-compose.yml build
+docker compose -f docker-compose.yml up
+```
+
+Service endpoints:
+
+- FastAPI: [http://localhost:8080/docs](http://localhost:8080/docs)
+- Streamlit: [http://localhost:8501](http://localhost:8501)
+
+Run tests:
+
+```sh
+uv run pytest
 ```
 
 ### Architecture Diagram
@@ -112,40 +124,38 @@ If your agents or chosen LLM require file-based credential files or certificates
 
 ### Docker Setup
 
-This project includes a Docker setup for easy development and deployment. The `compose.yaml` file defines three services: `postgres`, `agent_service` and `streamlit_app`. The `Dockerfile` for each service is in their respective directories.
+The minimal Campus AI Agent Docker setup uses one shared Python 3.11 image and two services in `docker-compose.yml`: `backend` for FastAPI and `frontend` for Streamlit. The project also retains an older upstream `compose.yaml`, so select the minimal setup explicitly with `-f docker-compose.yml`.
 
-For local development, we recommend using [docker compose watch](https://docs.docker.com/compose/file-watch/). This feature allows for a smoother development experience by automatically updating your containers when changes are detected in your source code.
+1. Create the environment file and persistent directories:
 
-1. Make sure you have Docker and Docker Compose (>= [v2.23.0](https://docs.docker.com/compose/release-notes/#2230)) installed on your system.
-
-2. Create a `.env` file from the `.env.example`. At minimum, you need to provide an LLM API key (e.g., OPENAI_API_KEY).
    ```sh
    cp .env.example .env
-   # Edit .env to add your API keys
+   # Edit .env and add an API key or local model configuration
+   mkdir -p data logs
    ```
 
-3. Build and launch the services in watch mode:
+2. Build and start the services:
 
    ```sh
-   docker compose watch
+   docker compose -f docker-compose.yml build
+   docker compose -f docker-compose.yml up
    ```
 
-   This will automatically:
-   - Start a PostgreSQL database service that the agent service connects to
-   - Start the agent service with FastAPI
-   - Start the Streamlit app for the user interface
+3. Open the applications:
 
-4. The services will now automatically update when you make changes to your code:
-   - Changes in the relevant python files and directories will trigger updates for the relevant services.
-   - NOTE: If you make changes to the `pyproject.toml` or `uv.lock` files, you will need to rebuild the services by running `docker compose up --build`.
+   - FastAPI docs: [http://localhost:8080/docs](http://localhost:8080/docs)
+   - Streamlit UI: [http://localhost:8501](http://localhost:8501)
 
-5. Access the Streamlit app by navigating to `http://localhost:8501` in your web browser.
+4. Inspect logs or stop the stack:
 
-6. The agent service API will be available at `http://0.0.0.0:8080`. You can also use the OpenAPI docs at `http://0.0.0.0:8080/redoc`.
+   ```sh
+   docker compose -f docker-compose.yml logs -f
+   docker compose -f docker-compose.yml down
+   ```
 
-7. Use `docker compose down` to stop the services.
+`./data`, including the local RAG vector store, and `./logs`, including Agent Trace output, are mounted into the containers. `.env` is mounted read-only and is not built into the image. The first RAG query can take longer if HuggingFace embedding model assets must be downloaded or initialized.
 
-This setup allows you to develop and test your changes in real-time without manually restarting the services.
+The read-only Campus Tools MCP adapter uses stdio transport and is intentionally not a long-running Web service in this compose stack. See [Docker Deployment](docs/deployment/docker_deployment.md) for its optional container command and full volume details.
 
 ### Building other apps on the AgentClient
 
@@ -174,28 +184,27 @@ The agent supports [LangGraph Studio](https://langchain-ai.github.io/langgraph/c
 
 ### Local development without Docker
 
-You can also run the agent service and the Streamlit app locally without Docker, just using a Python virtual environment.
+You can also run the agent service and the Streamlit app locally without Docker using `uv`.
 
 1. Create a virtual environment and install dependencies:
 
    ```sh
    uv sync --frozen
-   source .venv/bin/activate
    ```
 
 2. Run the FastAPI server:
 
    ```sh
-   python src/run_service.py
+   uv run python src/run_service.py
    ```
 
 3. In a separate terminal, run the Streamlit app:
 
    ```sh
-   streamlit run src/streamlit_app.py
+   uv run streamlit run src/streamlit_app.py --server.port=8501
    ```
 
-4. Open your browser and navigate to the URL provided by Streamlit (usually `http://localhost:8501`).
+4. Open FastAPI docs at `http://localhost:8080/docs` or Streamlit at `http://localhost:8501`.
 
 ## Projects built with or inspired by agent-service-toolkit
 

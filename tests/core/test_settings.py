@@ -37,6 +37,10 @@ def test_settings_default_values():
     assert settings.RAG_TOP_K == 5
     assert settings.RAG_VECTOR_K == 5
     assert settings.RAG_BM25_K == 8
+    assert settings.ENABLE_RAG_RERANKER is False
+    assert settings.RAG_RERANK_TOP_N == 10
+    assert settings.RAG_FINAL_TOP_K == 5
+    assert settings.RAG_RERANKER_MODEL is None
     assert settings.HISTORY_MAX_MESSAGES == 20
 
 
@@ -69,6 +73,26 @@ def test_settings_reads_history_max_messages():
         settings = Settings(_env_file=None)
 
     assert settings.HISTORY_MAX_MESSAGES == 12
+
+
+def test_settings_can_enable_lightweight_rag_reranker():
+    with patch.dict(
+        os.environ,
+        {
+            "OPENAI_API_KEY": "test_key",
+            "ENABLE_RAG_RERANKER": "true",
+            "RAG_RERANK_TOP_N": "12",
+            "RAG_FINAL_TOP_K": "4",
+            "RAG_RERANKER_MODEL": "optional-cross-encoder",
+        },
+        clear=True,
+    ):
+        settings = Settings(_env_file=None)
+
+    assert settings.ENABLE_RAG_RERANKER is True
+    assert settings.RAG_RERANK_TOP_N == 12
+    assert settings.RAG_FINAL_TOP_K == 4
+    assert settings.RAG_RERANKER_MODEL == "optional-cross-encoder"
 
 
 def test_settings_no_api_keys():

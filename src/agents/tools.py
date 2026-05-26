@@ -15,6 +15,7 @@ from core import settings
 from core.token_budget import estimate_tokens, format_rag_context, select_context_docs
 from core.tracing import TraceRecord, TraceSpan, current_trace_record, write_trace_jsonl
 from rag.hybrid_retriever import BM25Index, build_bm25_index, hybrid_search
+from rag.reranker import maybe_rerank_documents
 
 CAMPUS_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "campus"
 COURSE_SCHEDULE_PATH = CAMPUS_DATA_DIR / "course_schedule.json"
@@ -505,6 +506,11 @@ def _record_rag_trace(
     update_request: bool = True,
     context_documents=None,
     context_text: str = "",
+    reranker_enabled: bool | None = None,
+    rerank_input_count: int | None = None,
+    rerank_output_count: int | None = None,
+    rerank_latency_ms: float | None = None,
+    rerank_error: str | None = None,
 ) -> None:
     request_record = current_trace_record()
     if request_record is None:
@@ -522,6 +528,8 @@ def _record_rag_trace(
             "hybrid_score": doc.metadata.get("hybrid_score"),
             "vector_rank": doc.metadata.get("vector_rank"),
             "bm25_rank": doc.metadata.get("bm25_rank"),
+            "rerank_score": doc.metadata.get("rerank_score"),
+            "rerank_error": doc.metadata.get("rerank_error"),
         }
         for doc in (documents or [])
     ]
@@ -552,6 +560,13 @@ def _record_rag_trace(
         context_chars=len(context_text),
         estimated_context_tokens=estimate_tokens(context_text),
         dropped_context_docs_count=max(0, len(documents or []) - len(context_documents or [])),
+        reranker_enabled=reranker_enabled,
+        rerank_input_count=rerank_input_count,
+        rerank_output_count=rerank_output_count,
+        rerank_latency_ms=rerank_latency_ms,
+        rerank_error=rerank_error,
+        reranked_source_list=source_list if reranker_enabled else [],
+        reranked_chunk_id_list=chunk_id_list if reranker_enabled else [],
     )
     try:
         write_trace_jsonl(record)
@@ -578,6 +593,13 @@ def _record_rag_trace(
     request_record.dropped_context_docs_count = max(
         0, len(documents or []) - len(context_documents or [])
     )
+    request_record.reranker_enabled = reranker_enabled
+    request_record.rerank_input_count = rerank_input_count
+    request_record.rerank_output_count = rerank_output_count
+    request_record.rerank_latency_ms = rerank_latency_ms
+    request_record.rerank_error = rerank_error
+    request_record.reranked_source_list = source_list if reranker_enabled else []
+    request_record.reranked_chunk_id_list = chunk_id_list if reranker_enabled else []
     if error_message and request_record.error_message is None:
         request_record.error_message = error_message
     if not any(
@@ -600,7 +622,13 @@ def load_chroma_db():
             embedding_function=embeddings,
         )
         retriever = chroma_db.as_retriever(
-            search_kwargs={"k": max(settings.RAG_TOP_K, settings.RAG_VECTOR_K)}
+            search_kwargs={
+                "k": max(
+                    settings.RAG_TOP_K,
+                    settings.RAG_VECTOR_K,
+                    settings.RAG_RERANK_TOP_N if settings.ENABLE_RAG_RERANKER else 0,
+                )
+            }
         )
     except Exception as e:
         _record_rag_trace(
@@ -652,17 +680,47 @@ def clear_rag_cache() -> None:
     create_campus_policy_embeddings.cache_clear()
 
 
-def _retrieve_policy_documents(query: str, retriever) -> list[Document]:
+def _retrieve_policy_documents(query: str, retriever) -> tuple[list[Document], dict[str, object]]:
+    reranker_enabled = settings.ENABLE_RAG_RERANKER
+    candidate_limit = settings.RAG_RERANK_TOP_N if reranker_enabled else settings.RAG_TOP_K
     if settings.RAG_RETRIEVAL_MODE == "hybrid":
-        return hybrid_search(
+        documents = hybrid_search(
             query=query,
             vector_retriever=retriever,
             bm25_documents=load_bm25_index(),
-            top_k=settings.RAG_TOP_K,
-            vector_k=settings.RAG_VECTOR_K,
-            bm25_k=settings.RAG_BM25_K,
+            top_k=candidate_limit,
+            vector_k=max(settings.RAG_VECTOR_K, candidate_limit) if reranker_enabled else settings.RAG_VECTOR_K,
+            bm25_k=max(settings.RAG_BM25_K, candidate_limit) if reranker_enabled else settings.RAG_BM25_K,
         )
-    return list(retriever.invoke(query))[: settings.RAG_TOP_K]
+    else:
+        documents = list(retriever.invoke(query))[:candidate_limit]
+
+    if not reranker_enabled:
+        return documents, {
+            "reranker_enabled": False,
+            "rerank_input_count": None,
+            "rerank_output_count": None,
+            "rerank_latency_ms": None,
+            "rerank_error": None,
+        }
+
+    timer = TraceSpan().start()
+    reranked_documents = maybe_rerank_documents(query, documents, settings)
+    rerank_error = next(
+        (
+            str(document.metadata["rerank_error"])
+            for document in reranked_documents
+            if document.metadata.get("rerank_error")
+        ),
+        None,
+    )
+    return reranked_documents, {
+        "reranker_enabled": True,
+        "rerank_input_count": len(documents),
+        "rerank_output_count": len(reranked_documents),
+        "rerank_latency_ms": timer.stop(),
+        "rerank_error": rerank_error,
+    }
 
 
 def _extract_policy_snippets(documents, keyword: str) -> list[str]:
@@ -780,7 +838,7 @@ def query_campus_policy_func(query: str) -> str:
         retriever = load_chroma_db()
         rag_load_time_ms = load_timer.stop()
         retrieval_timer = TraceSpan().start()
-        documents = _retrieve_policy_documents(query, retriever)
+        documents, rerank_metrics = _retrieve_policy_documents(query, retriever)
     except Exception as e:
         if load_timer.elapsed_ms is None:
             rag_load_time_ms = load_timer.stop()
@@ -809,6 +867,7 @@ def query_campus_policy_func(query: str) -> str:
         no_answer_triggered=low_relevance,
         context_documents=context_documents,
         context_text=context_text,
+        **rerank_metrics,
     )
 
     if not documents:
@@ -850,7 +909,7 @@ def database_search_func(query: str) -> str:
 
         # Search the database for relevant documents
         retrieval_timer = TraceSpan().start()
-        documents = _retrieve_policy_documents(query, retriever)
+        documents, rerank_metrics = _retrieve_policy_documents(query, retriever)
     except Exception as e:
         if load_timer.elapsed_ms is None:
             rag_load_time_ms = load_timer.stop()
@@ -879,6 +938,7 @@ def database_search_func(query: str) -> str:
         no_answer_triggered=low_relevance,
         context_documents=context_documents,
         context_text=context_str,
+        **rerank_metrics,
     )
 
     # Format the documents into a string

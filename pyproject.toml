@@ -59,6 +59,7 @@ dependencies = [
     "uvicorn ~=0.32.1",
     "langchain-mcp-adapters>=0.1.10",
     "ddgs>=9.9.1",
+    "mcp[cli]>=1.12.4",
 ]
 
 [dependency-groups]

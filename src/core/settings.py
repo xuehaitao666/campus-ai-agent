@@ -135,6 +135,10 @@ class Settings(BaseSettings):
     RAG_TOP_K: int = 5
     RAG_VECTOR_K: int = 5
     RAG_BM25_K: int = 8
+    ENABLE_RAG_RERANKER: bool = False
+    RAG_RERANK_TOP_N: int = Field(default=10, ge=1)
+    RAG_FINAL_TOP_K: int = Field(default=5, ge=1)
+    RAG_RERANKER_MODEL: str | None = None
 
     # Multi-turn model context configuration
     HISTORY_MAX_MESSAGES: int = Field(default=20, ge=1, le=200)

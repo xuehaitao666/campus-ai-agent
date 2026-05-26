@@ -9,5 +9,10 @@
 env
 venv
 .venv
+.pytest_cache
+.mypy_cache
+.ruff_cache
+logs
+.DS_Store
 *.db
 privatecredentials/*

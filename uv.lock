@@ -39,6 +39,7 @@ dependencies = [
     { name = "langgraph-checkpoint-sqlite" },
     { name = "langgraph-supervisor" },
     { name = "langsmith" },
+    { name = "mcp", extra = ["cli"] },
     { name = "numexpr" },
     { name = "numpy" },
     { name = "onnxruntime" },
@@ -104,6 +105,7 @@ requires-dist = [
     { name = "langgraph-checkpoint-sqlite", specifier = "~=2.0.1" },
     { name = "langgraph-supervisor", specifier = "~=0.0.31" },
     { name = "langsmith", specifier = "~=0.4.0" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.12.4" },
     { name = "numexpr", specifier = "~=2.10.1" },
     { name = "numpy", specifier = "~=2.3.4" },
     { name = "onnxruntime", specifier = "~=1.21.1" },
@@ -2609,6 +2611,12 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/31/88/f6cb7e7c260cd4b4ce375f2b1614b33ce401f63af0f49f7141a2e9bf0a45/mcp-1.12.4.tar.gz", hash = "sha256:0765585e9a3a5916a3c3ab8659330e493adc7bd8b2ca6120c2d7a0c43e034ca5", size = 431148, upload-time = "2025-08-07T20:31:18.082Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ad/68/316cbc54b7163fa22571dcf42c9cc46562aae0a021b974e0a8141e897200/mcp-1.12.4-py3-none-any.whl", hash = "sha256:7aa884648969fab8e78b89399d59a683202972e12e6bc9a1c88ce7eda7743789", size = 160145, upload-time = "2025-08-07T20:31:15.69Z" },
+]
+
+[package.optional-dependencies]
+cli = [
+    { name = "python-dotenv" },
+    { name = "typer" },
 ]
 
 [[package]]

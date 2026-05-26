@@ -178,6 +178,47 @@ def test_database_search_uses_hybrid_retrieval_when_enabled(monkeypatch):
     assert "exam-policy-1" in result
 
 
+def test_database_search_records_reranker_metrics_when_enabled(monkeypatch):
+    documents = [
+        Document(
+            page_content="普通制度说明。",
+            metadata={"source": "handbook.md", "chunk_id": "handbook-1"},
+        ),
+        Document(
+            page_content="考试作弊将依据考试纪律处理。",
+            metadata={
+                "source": "exam_policy.md",
+                "chunk_id": "exam-1",
+                "section": "作弊处理",
+                "heading_path": "考试纪律 > 作弊处理",
+                "policy_type": "exam",
+            },
+        ),
+    ]
+    monkeypatch.setattr(campus_tools.settings, "ENABLE_RAG_RERANKER", True)
+    monkeypatch.setattr(campus_tools.settings, "RAG_RERANK_TOP_N", 2)
+    monkeypatch.setattr(campus_tools.settings, "RAG_FINAL_TOP_K", 1)
+    monkeypatch.setattr(campus_tools, "load_chroma_db", lambda: FakeRetriever(documents))
+    records = []
+    monkeypatch.setattr(campus_tools, "write_trace_jsonl", records.append)
+    request_record = TraceRecord(trace_id=generate_trace_id(), route="invoke")
+
+    with bind_trace_record(request_record):
+        result = database_search_func("考试作弊有什么后果？")
+
+    trace = next(record for record in records if record.route == "Database_Search")
+    assert "exam_policy.md" in result
+    assert trace.reranker_enabled is True
+    assert trace.rerank_input_count == 2
+    assert trace.rerank_output_count == 1
+    assert trace.rerank_latency_ms is not None
+    assert trace.rerank_error is None
+    assert trace.reranked_source_list == ["exam_policy.md"]
+    assert trace.reranked_chunk_id_list == ["exam-1"]
+    assert trace.retrieved_docs[0]["rerank_score"] > 0
+    assert request_record.reranker_enabled is True
+
+
 def test_database_search_propagates_retriever_errors(monkeypatch):
     monkeypatch.setattr(campus_tools, "load_chroma_db", lambda: FailingRetriever())
 

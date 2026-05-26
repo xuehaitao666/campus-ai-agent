@@ -1,0 +1,32 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uv run python src/run_service.py
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8080"
+      SQLITE_DB_PATH: /app/data/checkpoints.db
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uv run streamlit run src/streamlit_app.py --server.address=0.0.0.0 --server.port=8501
+    environment:
+      AGENT_URL: http://backend:8080
+    depends_on:
+      - backend
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro

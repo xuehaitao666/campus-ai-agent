@@ -56,6 +56,13 @@ class TraceRecord:
     context_chars: int | None = None
     estimated_context_tokens: int | None = None
     dropped_context_docs_count: int | None = None
+    reranker_enabled: bool | None = None
+    rerank_input_count: int | None = None
+    rerank_output_count: int | None = None
+    rerank_latency_ms: float | None = None
+    rerank_error: str | None = None
+    reranked_source_list: list[str] = field(default_factory=list)
+    reranked_chunk_id_list: list[str] = field(default_factory=list)
     history_message_count: int | None = None
     trimmed_message_count: int | None = None
     history_max_messages: int | None = None
