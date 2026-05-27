@@ -66,6 +66,10 @@ class TraceRecord:
     history_message_count: int | None = None
     trimmed_message_count: int | None = None
     history_max_messages: int | None = None
+    memory_store_backend: str | None = None
+    memory_loaded: bool = False
+    memory_saved: bool = False
+    memory_error: str | None = None
 
 
 class TraceSpan:

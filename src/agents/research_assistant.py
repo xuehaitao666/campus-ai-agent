@@ -1,14 +1,17 @@
-from datetime import datetime
+import logging
+import re
+from datetime import UTC, datetime
 from typing import Literal
 
 from langchain_community.tools import DuckDuckGoSearchResults, OpenWeatherMapQueryRun
 from langchain_community.utilities import OpenWeatherMapAPIWrapper
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda, RunnableSerializable
 from langgraph.graph import END, MessagesState, StateGraph
 from langgraph.managed import RemainingSteps
 from langgraph.prebuilt import ToolNode
+from langgraph.store.base import BaseStore
 
 from agents.campus_prompt import CAMPUS_AI_AGENT_SYSTEM_PROMPT
 from agents.safeguard import Safeguard, SafeguardOutput, SafetyAssessment
@@ -24,6 +27,42 @@ from core.history import trim_messages_for_model
 from core.model_fallback import ainvoke_with_model_fallback
 from core.tracing import TraceSpan, add_token_usage, current_trace_record
 
+logger = logging.getLogger(__name__)
+USER_MEMORY_NAMESPACE = "user_memory"
+USER_MEMORY_KEY = "profile"
+MAX_USER_MEMORY_CHARS = 300
+MEMORY_INTENT_MARKERS = (
+    "记住",
+    "以后默认",
+    "我的偏好",
+    "我习惯",
+    "我的信息是",
+    "我希望你以后",
+    "以后都",
+)
+SENSITIVE_MEMORY_MARKERS = (
+    "密码",
+    "验证码",
+    "身份证",
+    "学号",
+    "手机号",
+    "手机号码",
+    "电话号码",
+    "电话",
+    "邮箱",
+    "住址",
+    "地址",
+    "生日",
+    "出生",
+    "银行卡",
+    "信用卡",
+    "api key",
+    "api_key",
+    "secret",
+    "token",
+    "密钥",
+)
+
 
 class AgentState(MessagesState, total=False):
     """`total=False` is PEP589 specs.
@@ -33,6 +72,7 @@ class AgentState(MessagesState, total=False):
 
     safety: SafeguardOutput
     remaining_steps: RemainingSteps
+    user_memory: str | None
 
 
 web_search = DuckDuckGoSearchResults(name="WebSearch")
@@ -96,10 +136,78 @@ instructions = f"""
     """
 
 
+def extract_memory_candidate(user_message: str) -> str | None:
+    """Extract only explicitly requested, non-sensitive persistent preferences."""
+    normalized = re.sub(r"\s+", " ", user_message).strip()
+    lowered = normalized.lower()
+    if not any(marker in normalized for marker in MEMORY_INTENT_MARKERS):
+        return None
+    if any(marker in lowered for marker in SENSITIVE_MEMORY_MARKERS):
+        return None
+    return normalized[:MAX_USER_MEMORY_CHARS]
+
+
+async def load_user_memory(store: BaseStore | None, user_id: str | None) -> str | None:
+    """Load a short user-scoped memory value without blocking normal responses."""
+    record = current_trace_record()
+    if store is None or not user_id:
+        return None
+    if record is not None:
+        record.memory_store_backend = type(store).__name__
+    try:
+        item = await store.aget((USER_MEMORY_NAMESPACE, user_id), key=USER_MEMORY_KEY)
+        if not item or not isinstance(item.value, dict):
+            return None
+        memory = item.value.get("memory")
+        if not isinstance(memory, str) or not memory.strip():
+            return None
+        if record is not None:
+            record.memory_loaded = True
+        return memory.strip()[:MAX_USER_MEMORY_CHARS]
+    except Exception as error:
+        logger.warning("Unable to load long-term memory for user %s: %s", user_id, error)
+        if record is not None:
+            record.memory_error = str(error)
+        return None
+
+
+async def save_user_memory(
+    store: BaseStore | None, user_id: str | None, memory: str | None
+) -> bool:
+    """Persist one explicit user memory value, replacing the prior profile note."""
+    record = current_trace_record()
+    if store is None or not user_id or not memory:
+        return False
+    if record is not None:
+        record.memory_store_backend = type(store).__name__
+    try:
+        await store.aput(
+            (USER_MEMORY_NAMESPACE, user_id),
+            USER_MEMORY_KEY,
+            {"memory": memory[:MAX_USER_MEMORY_CHARS], "updated_at": datetime.now(UTC).isoformat()},
+        )
+        if record is not None:
+            record.memory_saved = True
+        return True
+    except Exception as error:
+        logger.warning("Unable to save long-term memory for user %s: %s", user_id, error)
+        if record is not None:
+            record.memory_error = str(error)
+        return False
+
+
+def build_messages_with_memory(messages: list, memory: str | None) -> list:
+    """Add a concise persistent-memory context without replacing chat history."""
+    context = [SystemMessage(content=instructions)]
+    if memory:
+        context.append(SystemMessage(content=f"用户长期记忆：{memory}"))
+    return context + messages
+
+
 def wrap_model(model: BaseChatModel) -> RunnableSerializable[AgentState, AIMessage]:
     bound_model = model.bind_tools(tools)
     preprocessor = RunnableLambda(
-        lambda state: [SystemMessage(content=instructions)] + state["messages"],
+        lambda state: build_messages_with_memory(state["messages"], state.get("user_memory")),
         name="StateModifier",
     )
     return preprocessor | bound_model  # type: ignore[return-value]
@@ -112,11 +220,26 @@ def format_safety_message(safety: SafeguardOutput) -> AIMessage:
     return AIMessage(content=content)
 
 
-async def acall_model(state: AgentState, config: RunnableConfig) -> AgentState:
+async def acall_model(
+    state: AgentState, config: RunnableConfig, store: BaseStore | None = None
+) -> AgentState:
     trimmed_messages, trimmed_message_count = trim_messages_for_model(
         state["messages"], settings.HISTORY_MAX_MESSAGES
     )
-    model_state = {**state, "messages": trimmed_messages}
+    configurable = config.get("configurable", {})
+    user_id = configurable.get("user_id")
+    latest_user_message = next(
+        (
+            str(message.content)
+            for message in reversed(state["messages"])
+            if isinstance(message, HumanMessage)
+        ),
+        "",
+    )
+    memory_candidate = extract_memory_candidate(latest_user_message)
+    await save_user_memory(store, user_id, memory_candidate)
+    user_memory = await load_user_memory(store, user_id)
+    model_state = {**state, "messages": trimmed_messages, "user_memory": user_memory}
     record = current_trace_record()
     if record is not None:
         record.history_message_count = max(

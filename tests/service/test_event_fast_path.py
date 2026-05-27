@@ -1,8 +1,10 @@
 import json
+from datetime import date as real_date
 
 import pytest
 from langchain_core.messages import AIMessage
 
+from agents import tools as tools_module
 from core.router import parse_event_query
 from core.tracing import write_trace_jsonl
 from schema import ChatMessage
@@ -92,7 +94,15 @@ def test_invoke_ai_lecture_uses_fast_path_without_agent(
 def test_invoke_recent_competition_registration_uses_fast_path_without_agent(
     test_client,
     mock_agent,
+    monkeypatch,
 ):
+    class FixedDate(real_date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 5, 26)
+
+    monkeypatch.setattr(tools_module, "date", FixedDate)
+
     response = test_client.post("/invoke", json={"message": "最近有没有比赛可以报名？"})
 
     assert response.status_code == 200
