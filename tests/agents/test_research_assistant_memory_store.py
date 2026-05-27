@@ -60,6 +60,32 @@ async def test_in_memory_store_saves_and_loads_memory_for_same_user_only():
 
 
 @pytest.mark.asyncio
+async def test_memory_store_contract_uses_user_profile_key_and_updates_latest_value():
+    store = InMemoryStore()
+
+    await research_module.save_user_memory(store, "user-a", "请记住我偏好简洁回答")
+    first = await store.aget(("user_memory", "user-a"), key="profile")
+    await research_module.save_user_memory(store, "user-a", "请记住我偏好表格回答")
+    updated = await store.aget(("user_memory", "user-a"), key="profile")
+
+    assert first.value["memory"] == "请记住我偏好简洁回答"
+    assert updated.value["memory"] == "请记住我偏好表格回答"
+    assert await store.aget(("user_memory", "user-b"), key="profile") is None
+
+
+@pytest.mark.asyncio
+async def test_sensitive_memory_candidate_is_not_written_to_store():
+    store = InMemoryStore()
+    candidate = research_module.extract_memory_candidate("请记住我的密码是 secret-123")
+
+    saved = await research_module.save_user_memory(store, "user-a", candidate)
+
+    assert candidate is None
+    assert saved is False
+    assert await store.aget(("user_memory", "user-a"), key="profile") is None
+
+
+@pytest.mark.asyncio
 async def test_store_errors_do_not_break_memory_helpers():
     store = FailingStore()
 

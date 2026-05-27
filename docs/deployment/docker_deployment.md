@@ -115,11 +115,10 @@ docker compose -f docker-compose.yml run --rm --no-deps \
 
 ## 9. Verification
 
-容器构建与启动验证：
+容器构建与启动验证也可以合并为一次本地 smoke check：
 
 ```bash
-docker compose -f docker-compose.yml build
-docker compose -f docker-compose.yml up
+docker compose -f docker-compose.yml up --build
 ```
 
 本地测试验证：
@@ -127,6 +126,14 @@ docker compose -f docker-compose.yml up
 ```bash
 uv run pytest
 ```
+
+该 Docker E2E 验证是开发者本地按需执行的 smoke test，不进入默认 `uv run pytest`
+测试套件，避免测试依赖宿主机 Docker daemon、模型下载缓存或端口状态。
+
+若 `8080` 或 `8501` 已被本机其他进程占用，请先停止冲突服务，或在
+`docker-compose.yml` 中临时调整宿主机侧端口映射后再运行 smoke check。
+若构建期间 Docker Hub 镜像拉取失败，请先确认 Docker Desktop/daemon、网络
+与镜像仓库访问状态，随后重新执行构建；此类外部镜像拉取故障不属于应用逻辑失败。
 
 ## 10. Limitations
 
