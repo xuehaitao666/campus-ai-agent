@@ -20,6 +20,7 @@ from agents.tools import (
     generate_study_plan,
     get_campus_events,
     get_course_schedule,
+    plan_campus_affair,
     query_campus_policy,
 )
 from core import get_model, settings
@@ -83,6 +84,7 @@ tools = [
     get_campus_events,
     generate_study_plan,
     query_campus_policy,
+    plan_campus_affair,
 ]
 
 # Add weather tool if API key is set
@@ -106,9 +108,12 @@ instructions = f"""
     - get_campus_events：本地 mock 校园活动查询工具。
     - generate_study_plan：基于本地 mock 学生画像和课程表的学习计划生成工具。
     - query_campus_policy：基于本地 Chroma 向量库的校园制度 RAG 问答工具。
+    - plan_campus_affair：组合制度依据、课程与活动信息生成校园事务办理计划。
     - WebSearch、Calculator，以及在配置 OPENWEATHERMAP_API_KEY 后可用的 Weather。
 
     工具选择规则：
+    0. 当用户需要办理请假/缺考/缓考、评奖风险处理，或处理活动与课程冲突等需要组合依据和行动步骤的复杂事务时，优先调用 plan_campus_affair。
+       - 参数提取：issue 使用用户完整情境；deadline 对应用户提供的期限；urgency 对应明确的紧急程度。
     1. 当用户询问课程安排、上课时间、上课地点、教室、授课教师、某一天是否有课、某个时间段有什么课、某门课在哪里上时，必须优先调用 get_course_schedule。
        - 参数提取：day 对应“周一/周二/今天/明天”等星期信息；time_period 对应“上午/下午/晚上”；course_name 对应课程名关键词，如“数据结构”。
     2. 当用户询问校园活动、讲座、比赛、社团活动、招聘会、工作坊、活动报名方式、活动时间或活动地点时，必须优先调用 get_campus_events。
@@ -127,6 +132,7 @@ instructions = f"""
     - 活动查询：用清晰条目列出活动名、时间、地点、类型、适合人群、主办方、报名方式、简介。
     - 学习计划：用结构化格式列出学习时间、学习主题、实践任务、复盘任务、预期产出，并给出最终建议。
     - 制度问答：按“简要结论、依据说明、办理流程、注意事项、来源文档”组织回答；区分“制度明确规定”和“建议性提醒”，并列出来源文档名称。
+    - 校园事务办理：保留 plan_campus_affair 输出中的事务类型、风险等级、步骤、时间线、材料、冲突信息与政策依据。
     - 如果工具返回没有匹配结果，必须如实说明没有查到相关信息，不要编造课程、活动、制度或学校安排。
 
     真实性边界：

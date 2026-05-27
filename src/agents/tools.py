@@ -953,3 +953,232 @@ def database_search_func(query: str) -> str:
 
 database_search: BaseTool = tool(database_search_func)
 database_search.name = "Database_Search"  # Update name with the purpose of your database
+
+
+def classify_campus_affair(issue: str) -> str:
+    """Classify a compound campus affair using lightweight, deterministic rules."""
+    normalized = issue.strip()
+    if any(keyword in normalized for keyword in ("课程冲突", "时间冲突")):
+        return "schedule_conflict"
+    if any(
+        keyword in normalized
+        for keyword in ("挂科", "奖学金", "绩点", "成绩", "不及格", "评奖")
+    ):
+        return "scholarship_risk"
+    if any(
+        keyword in normalized
+        for keyword in ("请假", "生病", "缺考", "缓考", "考试", "证明", "医院")
+    ):
+        return "exam_absence"
+    if any(
+        keyword in normalized
+        for keyword in ("活动", "比赛", "报名", "安排", "准备时间")
+    ):
+        return "schedule_conflict"
+    return "general"
+
+
+def _planner_event_keyword(issue: str) -> str | None:
+    for keyword in ("AI", "人工智能", "比赛", "竞赛", "讲座", "社团", "招聘", "报名"):
+        if keyword in issue:
+            return keyword
+    return None
+
+
+def _planner_trace_call(issue: str, affair_type: str, related_tools: list[str]) -> None:
+    record = current_trace_record()
+    if record is None:
+        return
+    call_data = {
+        "issue": issue,
+        "affair_type": affair_type,
+        "related_tools": related_tools,
+    }
+    for call in reversed(record.tool_calls):
+        if call.get("name") == "plan_campus_affair":
+            call["args"] = {**call.get("args", {}), **call_data}
+            return
+    record.tool_calls.append({"name": "plan_campus_affair", "args": call_data})
+
+
+def _format_planner_list(items: list[str]) -> str:
+    return "\n".join(f"{index}. {item}" for index, item in enumerate(items, 1))
+
+
+def _format_campus_affair_plan(plan: dict) -> str:
+    return (
+        "# 校园事务办理建议\n\n"
+        "## 事务类型\n"
+        f"- `{plan['affair_type']}`：{plan['affair_label']}\n\n"
+        "## 风险等级\n"
+        f"- {plan['risk_level']}\n\n"
+        "## 建议步骤\n"
+        f"{_format_planner_list(plan['steps'])}\n\n"
+        "## 时间线\n"
+        f"{_format_planner_list(plan['timeline'])}\n\n"
+        "## 需要准备的材料\n"
+        f"{_format_planner_list(plan['materials'])}\n\n"
+        "## 相关课程 / 活动\n"
+        f"{plan['related_schedule']}\n\n"
+        "## 政策依据\n"
+        f"{plan['policy_basis']}\n\n"
+        "## 注意事项\n"
+        f"{_format_planner_list(plan['notes'])}"
+    )
+
+
+def plan_campus_affair_func(
+    issue: str,
+    deadline: str | None = None,
+    urgency: str | None = None,
+) -> str:
+    """Create an executable plan for a compound campus affair.
+
+    Use this tool when a student needs a practical action plan involving leave
+    or exam absence, scholarship/grade risk, or a campus event conflicting with
+    classes. It combines existing read-only local policy, course, activity, and
+    student-profile data without using an LLM or a real campus system.
+
+    Args:
+        issue: The student's campus affair question or situation.
+        deadline: Optional known deadline or event time supplied by the student.
+        urgency: Optional urgency description, such as "紧急" or "本周内".
+    """
+    affair_type = classify_campus_affair(issue)
+    profile = _load_student_profile()
+    profile_note = (
+        f"本建议参考本地学生画像（{profile.get('major', '专业未提供')}，"
+        f"{profile.get('grade', '年级未提供')}），不代表真实教务记录。"
+    )
+    timeline_prefix = f"在 `{deadline}` 前：" if deadline else "尽快："
+    urgent = bool(urgency and urgency.strip() in {"紧急", "高", "high", "urgent"})
+
+    if affair_type == "exam_absence":
+        related_tools = ["query_campus_policy"]
+        policy_result = query_campus_policy_func(issue)
+        no_answer = "当前知识库中没有找到明确依据" in policy_result
+        policy_basis = policy_result
+        if no_answer:
+            policy_basis = (
+                "当前知识库中没有找到明确制度依据，建议以学院或教务处最新通知为准。\n\n"
+                f"{policy_result}"
+            )
+        plan = {
+            "affair_type": affair_type,
+            "affair_label": "请假 / 生病 / 缺考 / 缓考事务",
+            "risk_level": "高" if urgent or any(word in issue for word in ("缺考", "缓考")) else "中",
+            "steps": [
+                "保留就诊、病假或无法参加考试的事实材料，并记录涉及的课程或考试。",
+                "依据检索到的制度片段核对请假与缓考要求；依据不足时先向学院或教务处核实。",
+                "在确认的时限内提交申请，并保留提交记录与后续回复。",
+            ],
+            "timeline": [
+                f"{timeline_prefix}确认考试、课程与申请时限。",
+                "办理中：整理证明材料并按已核实流程提交申请。",
+                "办理后：确认审批结果以及补考、缓考或课程补交安排。",
+            ],
+            "materials": [
+                "本人情况说明及涉及课程/考试信息。",
+                "诊断证明、就诊记录或其他证明材料（以制度与通知实际要求为准）。",
+                "申请提交记录及审批结果截图或回执。",
+            ],
+            "related_schedule": "该事务当前以制度核实为主；如涉及具体课程时间，请补充课程名称或考试安排后进一步核对。",
+            "policy_basis": policy_basis,
+            "notes": [
+                profile_note,
+                "不得将未在来源文档中出现的办理窗口、电话号码、网址或期限视为确定规定。",
+            ],
+        }
+    elif affair_type == "scholarship_risk":
+        related_tools = ["query_campus_policy"]
+        policy_result = query_campus_policy_func(issue)
+        no_answer = "当前知识库中没有找到明确依据" in policy_result
+        policy_basis = policy_result
+        if no_answer:
+            policy_basis = (
+                "当前知识库中没有找到明确制度依据，建议以学院或教务处最新通知为准。\n\n"
+                f"{policy_result}"
+            )
+        plan = {
+            "affair_type": affair_type,
+            "affair_label": "成绩 / 奖学金风险事务",
+            "risk_level": "高" if "挂科" in issue or "不及格" in issue else "中",
+            "steps": [
+                "核对涉及课程成绩、补考状态和目标奖项类别。",
+                "仅依据检索到的奖学金或学生手册片段判断已明确的影响条件。",
+                "对未明确的评奖口径，向学院确认后再准备补救或申报材料。",
+            ],
+            "timeline": [
+                f"{timeline_prefix}确认成绩状态与评奖/申报节点。",
+                "本阶段：完成可补救的学习或补考准备，并整理支撑材料。",
+                "申报前：复核最新评定通知与资格条件。",
+            ],
+            "materials": [
+                "成绩与课程状态信息。",
+                "奖学金或评奖通知中要求的材料（以最新通知为准）。",
+                "可证明补救进展或综合表现的资料（如通知允许）。",
+            ],
+            "related_schedule": "未自动推断课程成绩或补考日程；请以真实教务结果和通知为准。",
+            "policy_basis": policy_basis,
+            "notes": [
+                profile_note,
+                "未在检索依据中明确出现的资格结论，不应视为已确认。",
+            ],
+        }
+    elif affair_type == "schedule_conflict":
+        related_tools = ["get_course_schedule", "get_campus_events"]
+        course_result = get_course_schedule_func()
+        event_result = get_campus_events_func(keyword=_planner_event_keyword(issue))
+        possible_conflict = "没有找到符合条件" not in event_result
+        plan = {
+            "affair_type": affair_type,
+            "affair_label": "活动 / 比赛 / 课程时间冲突事务",
+            "risk_level": "中" if possible_conflict else "低",
+            "steps": [
+                "核对目标活动或比赛的报名与参加时间。",
+                "将活动时间与课程表逐项比对，优先避免缺课或错过必要环节。",
+                "如确有冲突，先核实课程请假或活动调整规则后再作决定。",
+            ],
+            "timeline": [
+                f"{timeline_prefix}锁定活动、比赛与课程的具体时间。",
+                "报名或确认前：完成冲突核对并预留准备时间。",
+                "参加前：再次确认活动通知和课程安排是否有变化。",
+            ],
+            "materials": [
+                "活动或比赛报名通知与时间安排。",
+                "本人课程表和可能冲突的课程信息。",
+                "如需请假，另行依据学校制度准备相应材料。",
+            ],
+            "related_schedule": (
+                f"### 课程信息\n{course_result}\n\n"
+                f"### 活动信息\n{event_result}\n\n"
+                "### 冲突提醒\n"
+                + (
+                    "发现相关活动信息，请人工核对其具体时段与课程表是否重合。"
+                    if possible_conflict
+                    else "暂未检索到匹配活动，无法确认具体时间冲突。"
+                )
+            ),
+            "policy_basis": "本次仅完成课程与活动时间规划；如需办理请假或冲突豁免，请另行查询对应校园制度依据。",
+            "notes": [profile_note, "课程和活动数据为本地 mock 数据，应以实际通知与教务安排为准。"],
+        }
+    else:
+        related_tools = []
+        plan = {
+            "affair_type": affair_type,
+            "affair_label": "一般校园事务",
+            "risk_level": "待确认",
+            "steps": ["补充事务类别、相关时间、课程或活动名称，以便生成更明确的办理计划。"],
+            "timeline": [f"{timeline_prefix}补充可核对的信息与明确诉求。"],
+            "materials": ["与事务相关的通知、时间或证明材料（如有）。"],
+            "related_schedule": "当前信息不足，尚未执行课程或活动查询。",
+            "policy_basis": "当前知识库中没有找到明确制度依据，建议以学院或教务处最新通知为准。",
+            "notes": [profile_note, "未识别为已支持的事务类型，不输出确定性制度判断。"],
+        }
+
+    _planner_trace_call(issue, affair_type, related_tools)
+    return _format_campus_affair_plan(plan)
+
+
+plan_campus_affair: BaseTool = tool(plan_campus_affair_func)
+plan_campus_affair.name = "plan_campus_affair"

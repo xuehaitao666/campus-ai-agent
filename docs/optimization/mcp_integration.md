@@ -2,7 +2,7 @@
 
 ## 1. Why MCP
 
-Campus AI Agent 已经具备可复用的课程、活动和校园制度查询能力。Model Context Protocol (MCP) 提供了一个标准工具暴露方式，使外部 Agent 或 MCP Client 能发现并调用这些能力，而不必依赖本项目的 FastAPI 对话接口或 LangGraph 图结构。
+Campus AI Agent 已经具备可复用的课程、活动、校园制度查询和校园事务规划能力。Model Context Protocol (MCP) 提供了一个标准工具暴露方式，使外部 Agent 或 MCP Client 能发现并调用这些能力，而不必依赖本项目的 FastAPI 对话接口或 LangGraph 图结构。
 
 Phase 5.1 的目标不是替换主系统，而是建立一个轻量、只读、旁路的 MCP server adapter。
 
@@ -17,13 +17,14 @@ Phase 5.1 的目标不是替换主系统，而是建立一个轻量、只读、�
 
 ## 3. Exposed Tools
 
-MCP server 名称为 `campus-ai-agent-tools`，第一版仅注册三个只读工具：
+MCP server 名称为 `campus-ai-agent-tools`，当前注册四个只读工具：
 
 | MCP Tool | Native Function | 参数 | 用途 |
 | --- | --- | --- | --- |
 | `get_course_schedule` | `agents.tools.get_course_schedule_func` | `day`, `time_period`, `course_name` | 查询本地 mock 课程表 |
 | `get_campus_events` | `agents.tools.get_campus_events_func` | `keyword`, `date_range`, `event_type`, `target_audience` | 查询本地 mock 校园活动 |
 | `query_campus_policy` | `agents.tools.query_campus_policy_func` | `query` | 查询校园制度知识库 |
+| `plan_campus_affair` | `agents.tools.plan_campus_affair_func` | `issue`, `deadline`, `urgency` | 组合只读数据生成事务办理建议 |
 
 工具 adapter 返回 JSON 可序列化 envelope：
 
@@ -97,6 +98,7 @@ uv run pytest tests/mcp/test_mcp_tools.py -q
 - 课程查询；
 - 校园活动查询；
 - 校园制度知识库查询。
+- 校园事务办理建议生成。
 
 明确不暴露：
 

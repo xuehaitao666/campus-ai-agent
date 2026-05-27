@@ -53,12 +53,26 @@ def test_mcp_policy_tool_preserves_native_source_content(monkeypatch):
     assert "leave_policy.md::chunk-0001" in result["content"]
 
 
+def test_mcp_planner_tool_calls_native_planner_and_is_json_serializable(monkeypatch):
+    content = "# 校园事务办理建议\n\n## 事务类型\n- `exam_absence`"
+    monkeypatch.setattr(mcp_tools, "plan_campus_affair_func", lambda **kwargs: content)
+
+    result = mcp_tools.plan_campus_affair("我生病缺考怎么办？", urgency="紧急")
+
+    assert result["success"] is True
+    assert result["tool_name"] == "plan_campus_affair"
+    assert result["content"] == content
+    assert result["transport"] == "mcp"
+    json.dumps(result, ensure_ascii=False)
+
+
 @pytest.mark.parametrize(
     ("wrapper_name", "native_name", "kwargs"),
     [
         ("get_course_schedule", "get_course_schedule_func", {"day": "周二"}),
         ("get_campus_events", "get_campus_events_func", {"keyword": "比赛"}),
         ("query_campus_policy", "query_campus_policy_func", {"query": "宿舍晚归"}),
+        ("plan_campus_affair", "plan_campus_affair_func", {"issue": "生病缺考"}),
     ],
 )
 def test_mcp_tools_return_safe_error_envelope(monkeypatch, wrapper_name, native_name, kwargs):
@@ -86,4 +100,5 @@ async def test_mcp_server_registers_only_read_only_campus_tools():
         "get_course_schedule",
         "get_campus_events",
         "query_campus_policy",
+        "plan_campus_affair",
     }

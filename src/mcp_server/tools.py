@@ -5,6 +5,7 @@ from typing import Any
 from agents.tools import (
     get_campus_events_func,
     get_course_schedule_func,
+    plan_campus_affair_func,
     query_campus_policy_func,
 )
 
@@ -73,4 +74,19 @@ def query_campus_policy(query: str) -> dict[str, Any]:
         "query_campus_policy",
         query_campus_policy_func,
         query=query,
+    )
+
+
+def plan_campus_affair(
+    issue: str,
+    deadline: str | None = None,
+    urgency: str | None = None,
+) -> dict[str, Any]:
+    """Build a read-only campus affair handling plan from native campus tools."""
+    return _call_native_tool(
+        "plan_campus_affair",
+        plan_campus_affair_func,
+        issue=issue,
+        deadline=deadline,
+        urgency=urgency,
     )
