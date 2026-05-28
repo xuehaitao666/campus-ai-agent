@@ -40,6 +40,8 @@ def test_extract_memory_candidate_only_accepts_explicit_non_sensitive_memory():
     assert research_module.extract_memory_candidate("请帮我查询课程表") is None
     assert research_module.extract_memory_candidate("记住我的密码是 secret-123") is None
     assert research_module.extract_memory_candidate("请记住我的手机号是 13800000000") is None
+    assert research_module.extract_memory_candidate("你记住了我什么？") is None
+    assert research_module.extract_memory_candidate("删除我的记忆") is None
 
 
 @pytest.mark.asyncio

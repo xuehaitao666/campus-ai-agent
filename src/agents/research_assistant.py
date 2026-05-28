@@ -27,6 +27,7 @@ from core import get_model, settings
 from core.history import trim_messages_for_model
 from core.model_fallback import ainvoke_with_model_fallback
 from core.tracing import TraceSpan, add_token_usage, current_trace_record
+from memory.user_memory import delete_user_memory_tool, view_user_memory
 
 logger = logging.getLogger(__name__)
 USER_MEMORY_NAMESPACE = "user_memory"
@@ -40,6 +41,15 @@ MEMORY_INTENT_MARKERS = (
     "我的信息是",
     "我希望你以后",
     "以后都",
+)
+MEMORY_MANAGEMENT_MARKERS = (
+    "你记住了我什么",
+    "查看我的记忆",
+    "我的长期记忆",
+    "删除我的记忆",
+    "清空我的记忆",
+    "忘记我的偏好",
+    "不要再记住",
 )
 SENSITIVE_MEMORY_MARKERS = (
     "密码",
@@ -85,6 +95,8 @@ tools = [
     generate_study_plan,
     query_campus_policy,
     plan_campus_affair,
+    view_user_memory,
+    delete_user_memory_tool,
 ]
 
 # Add weather tool if API key is set
@@ -109,9 +121,12 @@ instructions = f"""
     - generate_study_plan：基于本地 mock 学生画像和课程表的学习计划生成工具。
     - query_campus_policy：基于本地 Chroma 向量库的校园制度 RAG 问答工具。
     - plan_campus_affair：组合制度依据、课程与活动信息生成校园事务办理计划。
+    - view_user_memory：仅在用户要求查看系统记住的长期偏好时使用。
+    - delete_user_memory：仅在用户明确要求删除、清空或忘记长期偏好时使用。
     - WebSearch、Calculator，以及在配置 OPENWEATHERMAP_API_KEY 后可用的 Weather。
 
     工具选择规则：
+    -1. 当用户明确问“你记住了我什么”“查看我的记忆”“我的长期记忆”时，调用 view_user_memory；当用户明确说“删除我的记忆”“清空我的记忆”“忘记我的偏好”或“不要再记住”时，调用 delete_user_memory。普通问答不得触发删除。
     0. 当用户需要办理请假/缺考/缓考、评奖风险处理，或处理活动与课程冲突等需要组合依据和行动步骤的复杂事务时，优先调用 plan_campus_affair。
        - 参数提取：issue 使用用户完整情境；deadline 对应用户提供的期限；urgency 对应明确的紧急程度。
     1. 当用户询问课程安排、上课时间、上课地点、教室、授课教师、某一天是否有课、某个时间段有什么课、某门课在哪里上时，必须优先调用 get_course_schedule。
@@ -133,6 +148,7 @@ instructions = f"""
     - 学习计划：用结构化格式列出学习时间、学习主题、实践任务、复盘任务、预期产出，并给出最终建议。
     - 制度问答：按“简要结论、依据说明、办理流程、注意事项、来源文档”组织回答；区分“制度明确规定”和“建议性提醒”，并列出来源文档名称。
     - 校园事务办理：保留 plan_campus_affair 输出中的事务类型、风险等级、步骤、时间线、材料、冲突信息与政策依据。
+    - 长期记忆管理：如实转述工具返回的当前记忆或删除状态，不猜测其他记忆内容。
     - 如果工具返回没有匹配结果，必须如实说明没有查到相关信息，不要编造课程、活动、制度或学校安排。
 
     真实性边界：
@@ -146,6 +162,8 @@ def extract_memory_candidate(user_message: str) -> str | None:
     """Extract only explicitly requested, non-sensitive persistent preferences."""
     normalized = re.sub(r"\s+", " ", user_message).strip()
     lowered = normalized.lower()
+    if any(marker in normalized for marker in MEMORY_MANAGEMENT_MARKERS):
+        return None
     if not any(marker in normalized for marker in MEMORY_INTENT_MARKERS):
         return None
     if any(marker in lowered for marker in SENSITIVE_MEMORY_MARKERS):

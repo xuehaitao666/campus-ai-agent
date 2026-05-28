@@ -12,6 +12,7 @@ Docker 为 Campus AI Agent 提供一个可重复的本地运行环境：FastAPI 
 flowchart LR
     U["Browser"] -->|"8501"| F["frontend<br/>Streamlit"]
     F -->|"http://backend:8080"| B["backend<br/>FastAPI"]
+    B --> P["postgres<br/>optional persistent checkpointer/store"]
     B --> D["./data:/app/data<br/>vector store and SQLite"]
     B --> L["./logs:/app/logs<br/>Agent Trace"]
     E[".env (read-only)"] --> B
@@ -20,6 +21,7 @@ flowchart LR
 
 | Service | Command | Published Port | Responsibility |
 | --- | --- | --- | --- |
+| `postgres` | `postgres:16` | `5432:5432` | Optional persistent checkpointer/store backend |
 | `backend` | `uv run python src/run_service.py` | `8080:8080` | FastAPI Agent API |
 | `frontend` | `uv run streamlit run src/streamlit_app.py --server.address=0.0.0.0 --server.port=8501` | `8501:8501` | Streamlit chat UI |
 
@@ -36,6 +38,19 @@ mkdir -p data logs
 ```
 
 不要把包含真实密钥的 `.env` 提交到版本库。
+
+默认 `DATABASE_TYPE` 为空时，服务使用 SQLite checkpointer + `InMemoryStore`。这适合本地测试，
+但长期用户记忆不会跨后端重启恢复。要让 `view_user_memory` 在重启后仍能读到记忆，请启用
+Postgres mode：
+
+```env
+DATABASE_TYPE=postgres
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+POSTGRES_DB=campus_agent
+```
 
 ## 4. Build and Start
 
@@ -87,6 +102,8 @@ docker compose -f docker-compose.yml down
 ```
 
 挂载在宿主机的 `data/` 和 `logs/` 不会随容器删除。
+Postgres 数据保存在命名 volume `postgres_data` 中；只要不执行删除 volume 的命令，
+`AsyncPostgresStore` 中的长期记忆会在 backend 容器重启后保留。
 
 ## 7. Data, Vector Store, and Trace Volumes
 
@@ -95,6 +112,7 @@ docker compose -f docker-compose.yml down
 | `./data` | `/app/data` | 校园 mock 数据、Chroma 向量库、容器内 SQLite checkpoint |
 | `./logs` | `/app/logs` | `agent_trace.jsonl` 等观测日志 |
 | `./.env` | `/app/.env:ro` | 运行配置与 API keys，只读挂载 |
+| `postgres_data` | `/var/lib/postgresql/data` | Postgres checkpointer 与长期 store 数据 |
 
 当前 `data/vector_store` 体积较小，`.dockerignore` 不默认排除它；运行时 `./data` volume 会以宿主机现有知识库和向量库为准。若未来向量库明显增大，可以选择只通过 volume 提供它，或在部署环境中重新建库，而不将其放入构建上下文。
 
@@ -135,7 +153,26 @@ uv run pytest
 若构建期间 Docker Hub 镜像拉取失败，请先确认 Docker Desktop/daemon、网络
 与镜像仓库访问状态，随后重新执行构建；此类外部镜像拉取故障不属于应用逻辑失败。
 
-## 10. Limitations
+## 10. Verify Long-Term Memory Persistence
+
+在 `.env` 中启用 Postgres mode 后：
+
+```bash
+docker compose -f docker-compose.yml up --build
+```
+
+然后在 Streamlit 或 API 中按顺序测试：
+
+1. 发送：`请记住我偏好简洁回答`
+2. 发送：`你记住了我什么？`
+3. 停止后端：`docker compose -f docker-compose.yml stop backend`
+4. 重新启动后端：`docker compose -f docker-compose.yml up -d backend`
+5. 再发送：`你记住了我什么？`
+
+期望仍然看到 `偏好简洁回答`。如果使用默认 SQLite mode，则长期记忆重启后丢失是预期行为，
+因为此时 store 是 `InMemoryStore`。
+
+## 11. Limitations
 
 这是最小可用的本地 Docker 方案，不是生产级云部署：
 

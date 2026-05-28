@@ -69,6 +69,8 @@ class TraceRecord:
     memory_store_backend: str | None = None
     memory_loaded: bool = False
     memory_saved: bool = False
+    memory_action: str | None = None
+    memory_action_success: bool | None = None
     memory_error: str | None = None
 
 
