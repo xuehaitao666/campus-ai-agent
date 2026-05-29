@@ -1,0 +1,170 @@
+[
+  {
+    "id": "course_001",
+    "query": "我周一上午有什么课？",
+    "expected_intent": "course_schedule",
+    "expected_skill": "course_query",
+    "expected_fast_path": true,
+    "category": "course"
+  },
+  {
+    "id": "course_002",
+    "query": "数据结构课在哪里上？",
+    "expected_intent": "course_schedule",
+    "expected_skill": "course_query",
+    "expected_fast_path": true,
+    "category": "course"
+  },
+  {
+    "id": "course_003",
+    "query": "我周二下午有课吗？",
+    "expected_intent": "course_schedule",
+    "expected_skill": "course_query",
+    "expected_fast_path": true,
+    "category": "course"
+  },
+  {
+    "id": "course_004",
+    "query": "操作系统课在哪里上？",
+    "expected_intent": "course_schedule",
+    "expected_skill": "course_query",
+    "expected_fast_path": true,
+    "category": "course"
+  },
+  {
+    "id": "event_001",
+    "query": "这周有什么 AI 相关讲座？",
+    "expected_intent": "campus_event",
+    "expected_skill": "event_query",
+    "expected_fast_path": true,
+    "category": "event"
+  },
+  {
+    "id": "event_002",
+    "query": "最近有什么比赛可以报名？",
+    "expected_intent": "campus_event",
+    "expected_skill": "event_query",
+    "expected_fast_path": true,
+    "category": "event"
+  },
+  {
+    "id": "event_003",
+    "query": "有没有适合软件工程学生的活动？",
+    "expected_intent": "campus_event",
+    "expected_skill": "event_query",
+    "expected_fast_path": true,
+    "category": "event"
+  },
+  {
+    "id": "event_004",
+    "query": "最近有什么宣讲会？",
+    "expected_intent": "campus_event",
+    "expected_skill": "event_query",
+    "expected_fast_path": true,
+    "category": "event"
+  },
+  {
+    "id": "policy_001",
+    "query": "请假流程是什么？",
+    "expected_intent": "campus_policy",
+    "expected_skill": "policy_qa",
+    "expected_fast_path": true,
+    "category": "policy"
+  },
+  {
+    "id": "policy_002",
+    "query": "挂科了还能申请奖学金吗？",
+    "expected_intent": "campus_policy",
+    "expected_skill": "policy_qa",
+    "expected_fast_path": true,
+    "category": "policy"
+  },
+  {
+    "id": "policy_003",
+    "query": "宿舍晚归会怎么处理？",
+    "expected_intent": "campus_policy",
+    "expected_skill": "policy_qa",
+    "expected_fast_path": true,
+    "category": "policy"
+  },
+  {
+    "id": "policy_004",
+    "query": "考试作弊有什么后果？",
+    "expected_intent": "campus_policy",
+    "expected_skill": "policy_qa",
+    "expected_fast_path": true,
+    "category": "policy"
+  },
+  {
+    "id": "policy_005",
+    "query": "生病缺考怎么办？",
+    "expected_intent": "campus_policy",
+    "expected_skill": "policy_qa",
+    "expected_fast_path": true,
+    "category": "policy"
+  },
+  {
+    "id": "study_001",
+    "query": "帮我制定一份 7 天 AI Agent 学习计划",
+    "expected_intent": "study_plan",
+    "expected_skill": "study_plan",
+    "expected_fast_path": true,
+    "category": "study"
+  },
+  {
+    "id": "study_002",
+    "query": "帮我准备 AI Agent 面试学习路线",
+    "expected_intent": "study_plan",
+    "expected_skill": "study_plan",
+    "expected_fast_path": true,
+    "category": "study"
+  },
+  {
+    "id": "study_003",
+    "query": "结合我的课程表，帮我规划本周学习",
+    "expected_intent": "study_plan",
+    "expected_skill": "study_plan",
+    "expected_fast_path": true,
+    "category": "study"
+  },
+  {
+    "id": "study_004",
+    "query": "我明天下午没课，帮我安排学习",
+    "expected_intent": "study_plan",
+    "expected_skill": "study_plan",
+    "expected_fast_path": true,
+    "category": "study"
+  },
+  {
+    "id": "study_005",
+    "query": "帮我复习数据库",
+    "expected_intent": "study_plan",
+    "expected_skill": "study_plan",
+    "expected_fast_path": true,
+    "category": "study"
+  },
+  {
+    "id": "general_001",
+    "query": "什么是 LangGraph？",
+    "expected_intent": "unknown",
+    "expected_skill": null,
+    "expected_fast_path": false,
+    "category": "general"
+  },
+  {
+    "id": "general_002",
+    "query": "请你介绍一下 Transformer",
+    "expected_intent": "general_chat",
+    "expected_skill": null,
+    "expected_fast_path": false,
+    "category": "general"
+  },
+  {
+    "id": "general_003",
+    "query": "你好呀",
+    "expected_intent": "general_chat",
+    "expected_skill": null,
+    "expected_fast_path": false,
+    "category": "general"
+  }
+]

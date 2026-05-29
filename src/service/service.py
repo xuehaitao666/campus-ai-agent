@@ -23,14 +23,16 @@ from langsmith import Client as LangsmithClient
 from langsmith import uuid7
 
 from agents import DEFAULT_AGENT, AgentGraph, get_agent, get_all_agent_info, load_agent
-from agents.tools import get_campus_events_func, get_course_schedule_func
+from agents.tools import generate_study_plan_func, get_campus_events_func, get_course_schedule_func, query_campus_policy_func
 from core import settings
 from core.response_templates import (
     format_course_fast_path_response,
     format_event_fast_path_response,
     format_fast_path_error,
+    format_study_plan_fast_path_response,
 )
 from core.router import RouteIntent, parse_course_query, parse_event_query, route_query
+from skills.executor import try_skill_fast_path
 from core.tracing import (
     TraceRecord,
     TraceSpan,
@@ -335,6 +337,136 @@ def _maybe_handle_event_fast_path(
     return ChatMessage(type="ai", content=content, run_id=str(run_id))
 
 
+def _maybe_handle_policy_qa_fast_path(
+    user_input: UserInput,
+    trace_record: TraceRecord,
+) -> ChatMessage | None:
+    decision = route_query(user_input.message)
+    if decision.intent != RouteIntent.POLICY:
+        return None
+
+    run_id = uuid7()
+    trace_record.run_id = str(run_id)
+    trace_record.thread_id = user_input.thread_id or str(uuid4())
+    trace_record.user_id = user_input.user_id or str(uuid4())
+    trace_record.route = "campus_policy_fast_path"
+    trace_record.tool_calls = [{"name": "query_campus_policy", "args": {"query": user_input.message}}]
+    trace_record.llm_time_ms = 0
+    trace_record.prompt_tokens = 0
+    trace_record.completion_tokens = 0
+    trace_record.total_tokens = 0
+
+    with TraceSpan() as tool_timer:
+        content = query_campus_policy_func(query=user_input.message)
+    trace_record.tool_time_ms = tool_timer.elapsed_ms
+    return ChatMessage(type="ai", content=content, run_id=str(run_id))
+
+def _parse_study_plan_fast_path_params(query: str) -> dict[str, object]:
+    """Extract study-plan parameters from a user query using conservative rules.
+
+    Returns a dict with keys *goal*, *days*, *available_time*, and
+    *focus_topics*.  Values that cannot be extracted are None.
+    """
+    import re
+
+    params: dict[str, object] = {
+        "goal": None,
+        "days": None,
+        "available_time": None,
+        "focus_topics": None,
+    }
+
+    # -- days ----------------------------------------------------------------
+    m = re.search(r"(\d+)\s*天", query)
+    if m:
+        params["days"] = int(m.group(1))
+    else:
+        cn_map = {"七": 7, "一": 1, "两": 2, "三": 3, "五": 5, "十": 10}
+        for cn, val in cn_map.items():
+            if f"{cn}天" in query:
+                params["days"] = val
+                break
+
+    # -- goal ----------------------------------------------------------------
+    goal_patterns = [
+        r"制定(?:一份|一个)?(.+?)(?:的)?(?:学习计划|学习路线|备考计划|复习计划)",
+        r"准备(.+?)(?:面试|考试)",
+        r"(.+?)备考",
+        r"(.+?)复习",
+    ]
+    for pat in goal_patterns:
+        m = re.search(pat, query)
+        if m:
+            raw = m.group(1).strip("的，,、 ")
+            if raw and len(raw) >= 2:
+                params["goal"] = raw
+            break
+
+    # -- available_time -----------------------------------------------------
+    time_keywords = [
+        "今天上午", "今天下午", "今天晚上", "明天",
+        "周末", "上午", "下午", "晚上",
+    ]
+    for kw in time_keywords:
+        if kw in query:
+            params["available_time"] = kw
+            break
+
+    # -- focus_topics -------------------------------------------------------
+    tech_keywords = [
+        "AI Agent", "LangGraph", "LangChain", "RAG",
+        "FastAPI", "Streamlit", "Docker", "Python",
+        "数据结构", "算法", "数据库", "操作系统",
+    ]
+    found = [kw for kw in tech_keywords if kw.lower() in query.lower()]
+    if found:
+        params["focus_topics"] = ", ".join(found)
+
+    return params
+
+
+def _maybe_handle_study_plan_fast_path(
+    user_input: UserInput,
+    trace_record: TraceRecord,
+) -> ChatMessage | None:
+    decision = route_query(user_input.message)
+    if decision.intent != RouteIntent.STUDY_PLAN:
+        return None
+
+    params = _parse_study_plan_fast_path_params(user_input.message)
+    if not any(params.values()):
+        return None
+
+    run_id = uuid7()
+    trace_record.run_id = str(run_id)
+    trace_record.thread_id = user_input.thread_id or str(uuid4())
+    trace_record.user_id = user_input.user_id or str(uuid4())
+    trace_record.route = "study_plan_fast_path"
+    trace_record.tool_calls = [{"name": "generate_study_plan", "args": params}]
+    trace_record.llm_time_ms = 0
+    trace_record.prompt_tokens = 0
+    trace_record.completion_tokens = 0
+    trace_record.total_tokens = 0
+
+    with TraceSpan() as tool_timer:
+        plan_json = generate_study_plan_func(
+            goal=params["goal"],                   # type: ignore[arg-type]
+            days=params["days"] or 7,              # type: ignore[arg-type]
+            available_time=params["available_time"],  # type: ignore[arg-type]
+            focus_topics=params["focus_topics"],      # type: ignore[arg-type]
+        )
+    trace_record.tool_time_ms = tool_timer.elapsed_ms
+
+    content = format_study_plan_fast_path_response(plan_json)
+    return ChatMessage(type="ai", content=content, run_id=str(run_id))
+
+FAST_PATH_HANDLERS = {
+    "_maybe_handle_course_fast_path": _maybe_handle_course_fast_path,
+    "_maybe_handle_event_fast_path": _maybe_handle_event_fast_path,
+    "_maybe_handle_policy_qa_fast_path": _maybe_handle_policy_qa_fast_path,
+    "_maybe_handle_study_plan_fast_path": _maybe_handle_study_plan_fast_path,
+}
+
 async def _handle_input(
     user_input: UserInput,
     agent: AgentGraph,
@@ -417,11 +549,7 @@ async def invoke(user_input: UserInput, agent_id: str = DEFAULT_AGENT) -> ChatMe
     trace_record = _new_request_trace(user_input, agent_id, "invoke")
     timer = TraceSpan().start()
     try:
-        if output := _maybe_handle_course_fast_path(user_input, trace_record):
-            trace_record.total_latency_ms = timer.stop()
-            _add_trace_custom_data(output, trace_record)
-            return output
-        if output := _maybe_handle_event_fast_path(user_input, trace_record):
+        if output := try_skill_fast_path(user_input, trace_record, FAST_PATH_HANDLERS):
             trace_record.total_latency_ms = timer.stop()
             _add_trace_custom_data(output, trace_record)
             return output
@@ -472,12 +600,7 @@ async def message_generator(
     trace_record = _new_request_trace(user_input, agent_id, "stream")
     timer = TraceSpan().start()
     try:
-        if output := _maybe_handle_course_fast_path(user_input, trace_record):
-            trace_record.total_latency_ms = timer.stop()
-            _add_trace_custom_data(output, trace_record)
-            yield f"data: {json.dumps({'type': 'message', 'content': output.model_dump()})}\n\n"
-            return
-        if output := _maybe_handle_event_fast_path(user_input, trace_record):
+        if output := try_skill_fast_path(user_input, trace_record, FAST_PATH_HANDLERS):
             trace_record.total_latency_ms = timer.stop()
             _add_trace_custom_data(output, trace_record)
             yield f"data: {json.dumps({'type': 'message', 'content': output.model_dump()})}\n\n"

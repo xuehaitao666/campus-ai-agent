@@ -72,6 +72,8 @@ class TraceRecord:
     memory_action: str | None = None
     memory_action_success: bool | None = None
     memory_error: str | None = None
+    skill_name: str | None = None
+    skill_fallback_reason: str | None = None
 
 
 class TraceSpan:

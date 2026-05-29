@@ -112,3 +112,70 @@ def format_fast_path_error(intent: str, error_message: str) -> str:
         "### 下一步\n"
         "你也可以换一种查询条件后再次尝试。"
     )
+
+
+def format_study_plan_fast_path_response(plan_json: str) -> str:
+    """Format a study-plan JSON string as a human-readable Markdown response.
+
+    The input is the ``json.dumps(plan)`` output from
+    :func:`generate_study_plan_func`.  If the JSON cannot be parsed the raw
+    string is returned as a fallback so the response is never empty.
+    """
+    import json
+
+    try:
+        plan = json.loads(plan_json)
+    except (json.JSONDecodeError, TypeError):
+        return str(plan_json)
+
+    lines: list[str] = []
+
+    # Title
+    title = plan.get("plan_title") or "学习计划"
+    lines.append(f"## {title}")
+    lines.append("")
+
+    # Goal and duration
+    goal = plan.get("goal", "")
+    duration = plan.get("duration_days", "")
+    if goal:
+        lines.append(f"**学习目标**：{goal}")
+    if duration:
+        lines.append(f"**计划天数**：{duration} 天")
+    if goal or duration:
+        lines.append("")
+
+    # Daily plan
+    daily = plan.get("daily_plan", [])
+    if daily:
+        lines.append("### 每日安排")
+        lines.append("")
+        for entry in daily:
+            day_label = entry.get("day", "")
+            available = entry.get("available_time", "")
+            topic = entry.get("learning_topic", "")
+            practice = entry.get("practice_task", "")
+            review = entry.get("review_task", "")
+            output = entry.get("expected_output", "")
+
+            lines.append(f"**{day_label}**")
+            if available:
+                lines.append(f"- 可用时间：{available}")
+            if topic:
+                lines.append(f"- 学习主题：{topic}")
+            if practice:
+                lines.append(f"- 实践任务：{practice}")
+            if review:
+                lines.append(f"- 复盘任务：{review}")
+            if output:
+                lines.append(f"- 预期产出：{output}")
+            lines.append("")
+
+    # Final suggestion
+    suggestion = plan.get("final_suggestion", "")
+    if suggestion:
+        lines.append("### 建议")
+        lines.append("")
+        lines.append(suggestion)
+
+    return "\n".join(lines)
